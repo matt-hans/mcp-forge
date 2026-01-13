@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from mcp_forge.data.formatter import parse_tool_call
 from mcp_forge.state import ToolDefinition, ValidationResult
@@ -350,7 +351,7 @@ def generate_validation_samples(
     for tool in tools:
         if tool.name == "get_weather":
             locations = ["Paris", "London", "Tokyo", "New York", "Sydney"]
-            for i in range(samples_per_tool):
+            for _ in range(samples_per_tool):
                 location = rng.choice(locations)
                 prompt = rng.choice(WEATHER_PROMPTS).format(location=location)
                 samples.append(
@@ -363,7 +364,7 @@ def generate_validation_samples(
 
         elif tool.name == "list_files":
             paths = ["/home/user/documents", "/home/user/projects", "/tmp"]
-            for i in range(samples_per_tool):
+            for _ in range(samples_per_tool):
                 path = rng.choice(paths)
                 prompt = rng.choice(FILESYSTEM_PROMPTS).format(path=path)
                 samples.append(
@@ -376,7 +377,7 @@ def generate_validation_samples(
 
         else:
             # Generic sample generation for unknown tools
-            for i in range(samples_per_tool):
+            for _ in range(samples_per_tool):
                 samples.append(
                     ValidationSample(
                         prompt=f"Use the {tool.name} tool with default arguments.",
