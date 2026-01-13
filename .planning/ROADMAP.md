@@ -148,25 +148,28 @@ Transform the existing prototype into a complete, production-ready CLI pipeline 
 
 ---
 
-## Phase 7: Benchmark Suite
+## Phase 7: Benchmark Suite ✅
+
+**Status**: Complete (2026-01-13)
+**Plans**: 1 | **Commits**: 7 | **Tests**: +49
 
 **Goal**: Implement the BENCHMARKING stage with comprehensive metrics.
 
-**Scope**:
-- Create `validation/benchmark.py` for evaluation suite
-- Implement tool accuracy measurement
-- Add end-to-end loop success tracking
-- Measure response latency metrics
-- Generate benchmark reports (JSON + summary)
-
-**Research Needed**: LLM evaluation metrics for tool calling, latency measurement patterns
+**Deliverables**:
+- BenchmarkConfig with model, samples, thresholds, and baseline comparison
+- LatencyStats with min/max/mean/p50/p95/p99 calculations
+- BenchmarkRunner with per-tool and per-scenario sample generation
+- Latency tracking with warmup sample exclusion
+- CLI benchmark command with stub/baseline options
+- Pipeline Stage 6 integration with state persistence
+- Reports in JSON + Markdown via StateManager
 
 **Acceptance Criteria**:
-- [ ] `mcp-forge benchmark --model ./trained --server <cmd>` runs benchmarks
-- [ ] Tool selection accuracy calculated (target: 90%+)
-- [ ] No-tool correctness measured (target: 85%+)
-- [ ] Loop completion rate tracked (target: 95%+)
-- [ ] Benchmark reports generated and persisted
+- [x] `mcp-forge benchmark --model ./trained --server <cmd>` runs benchmarks
+- [x] Tool selection accuracy calculated (target: 90%+)
+- [x] No-tool correctness measured (target: 85%+)
+- [x] Loop completion rate tracked (target: 95%+)
+- [x] Benchmark reports generated and persisted
 
 ---
 
@@ -224,7 +227,7 @@ Transform the existing prototype into a complete, production-ready CLI pipeline 
 | 4 | QC Gate Integration | ✅ Complete | 203 |
 | 5 | Training Engine | ✅ Complete | 242 |
 | 6 | Looped Validation | ✅ Complete | 315 |
-| 7 | Benchmark Suite | Pending | - |
+| 7 | Benchmark Suite | ✅ Complete | 364 |
 | 8 | GGUF Export | Pending | - |
 | 9 | Bundle Packaging | Pending | - |
 
