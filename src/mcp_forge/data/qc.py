@@ -86,6 +86,85 @@ class ValidatedSample:
         }
 
 
+class QCFailedError(Exception):
+    """Raised when QC validation fails and blocks pipeline progression.
+
+    Provides detailed information about which thresholds failed
+    and suggestions for remediation.
+    """
+
+    def __init__(
+        self,
+        report: "QCReport",
+        threshold: float,
+        min_samples: int,
+        message: str | None = None,
+    ):
+        self.report = report
+        self.threshold = threshold
+        self.min_samples = min_samples
+
+        # Build detailed error message
+        failures = []
+        if report.schema_pass_rate < threshold:
+            failures.append(
+                f"Schema pass rate {report.schema_pass_rate:.1%} < threshold {threshold:.1%}"
+            )
+
+        for tool, count in report.tool_coverage.items():
+            if count < min_samples:
+                failures.append(
+                    f"Tool '{tool}' has {count} samples < minimum {min_samples}"
+                )
+
+        self.failures = failures
+        self.remediation = [
+            "Run with --fix to auto-repair fixable issues",
+            "Lower threshold with --threshold <value>",
+            "Generate more training data for low-coverage tools",
+            "Review and fix schema errors manually",
+        ]
+
+        if message:
+            super().__init__(message)
+        else:
+            super().__init__(
+                f"QC validation failed: {len(failures)} threshold(s) not met. "
+                f"Run 'mcp-forge qa --data <file> --tools <file>' for details."
+            )
+
+    def get_sample_issues(self, limit: int = 5) -> list[dict[str, Any]]:
+        """Get sample of issues for display."""
+        return self.report.issues[:limit]
+
+    def format_error(self) -> str:
+        """Format error with details for terminal display."""
+        lines = [
+            "QC Validation Failed",
+            "=" * 40,
+            "",
+            "Failures:",
+        ]
+        for failure in self.failures:
+            lines.append(f"  - {failure}")
+
+        lines.extend([
+            "",
+            "Sample issues:",
+        ])
+        for issue in self.get_sample_issues():
+            lines.append(f"  [{issue['severity']}] {issue['issue_type']}: {issue['message']}")
+
+        lines.extend([
+            "",
+            "Remediation suggestions:",
+        ])
+        for suggestion in self.remediation:
+            lines.append(f"  - {suggestion}")
+
+        return "\n".join(lines)
+
+
 class DataQualityController:
     """Validates and cleans training data."""
 

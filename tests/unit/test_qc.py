@@ -11,6 +11,7 @@ import pytest
 from mcp_forge.data.qc import (
     DataQualityController,
     QCConfig,
+    QCFailedError,
     QCIssue,
     ValidatedSample,
 )
@@ -484,3 +485,135 @@ class TestDataQualityControllerIntegration:
         assert report.valid_samples == 2  # Only 2 valid samples
         assert report.dropped_samples == 2
         assert len(validated) == 2
+
+
+class TestQCFailedError:
+    """Tests for QCFailedError exception."""
+
+    def test_error_with_schema_failure(self, qc_report: "QCReport") -> None:
+        """Test error captures schema rate failure."""
+        from mcp_forge.state import QCReport
+
+        report = QCReport(
+            total_samples=100,
+            valid_samples=80,
+            dropped_samples=20,
+            schema_pass_rate=0.80,  # Below threshold
+            dedup_rate=0.05,
+            tool_coverage={"tool1": 40, "tool2": 40},
+            scenario_coverage={"standard": 60, "no_tool": 20},
+            issues=[{"severity": "error", "issue_type": "schema_error", "message": "Bad schema"}],
+        )
+
+        error = QCFailedError(report, threshold=0.98, min_samples=10)
+
+        assert len(error.failures) == 1
+        assert "80.0%" in error.failures[0]
+        assert "98.0%" in error.failures[0]
+
+    def test_error_with_tool_coverage_failure(self) -> None:
+        """Test error captures tool coverage failures."""
+        from mcp_forge.state import QCReport
+
+        report = QCReport(
+            total_samples=100,
+            valid_samples=100,
+            dropped_samples=0,
+            schema_pass_rate=0.99,
+            dedup_rate=0.0,
+            tool_coverage={"tool1": 5, "tool2": 40},  # tool1 below min
+            scenario_coverage={"standard": 60},
+            issues=[],
+        )
+
+        error = QCFailedError(report, threshold=0.98, min_samples=10)
+
+        assert len(error.failures) == 1
+        assert "tool1" in error.failures[0]
+        assert "5" in error.failures[0]
+
+    def test_error_message(self) -> None:
+        """Test default error message format."""
+        from mcp_forge.state import QCReport
+
+        report = QCReport(
+            total_samples=100,
+            valid_samples=80,
+            dropped_samples=20,
+            schema_pass_rate=0.80,
+            dedup_rate=0.05,
+            tool_coverage={"tool1": 5},
+            scenario_coverage={},
+            issues=[],
+        )
+
+        error = QCFailedError(report, threshold=0.98, min_samples=10)
+
+        assert "QC validation failed" in str(error)
+        assert "2 threshold(s)" in str(error)
+
+    def test_get_sample_issues(self) -> None:
+        """Test get_sample_issues returns limited issues."""
+        from mcp_forge.state import QCReport
+
+        issues = [{"severity": "error", "issue_type": f"issue_{i}", "message": f"msg_{i}"} for i in range(10)]
+        report = QCReport(
+            total_samples=100,
+            valid_samples=90,
+            dropped_samples=10,
+            schema_pass_rate=0.80,
+            dedup_rate=0.0,
+            tool_coverage={},
+            scenario_coverage={},
+            issues=issues,
+        )
+
+        error = QCFailedError(report, threshold=0.98, min_samples=10)
+
+        assert len(error.get_sample_issues(5)) == 5
+        assert len(error.get_sample_issues(3)) == 3
+
+    def test_format_error_output(self) -> None:
+        """Test format_error produces readable output."""
+        from mcp_forge.state import QCReport
+
+        report = QCReport(
+            total_samples=100,
+            valid_samples=80,
+            dropped_samples=20,
+            schema_pass_rate=0.80,
+            dedup_rate=0.05,
+            tool_coverage={"tool1": 5},
+            scenario_coverage={},
+            issues=[{"severity": "error", "issue_type": "schema_error", "message": "Bad schema"}],
+        )
+
+        error = QCFailedError(report, threshold=0.98, min_samples=10)
+        formatted = error.format_error()
+
+        assert "QC Validation Failed" in formatted
+        assert "Failures:" in formatted
+        assert "Sample issues:" in formatted
+        assert "Remediation suggestions:" in formatted
+        assert "--fix" in formatted
+
+    def test_remediation_suggestions(self) -> None:
+        """Test error includes helpful remediation suggestions."""
+        from mcp_forge.state import QCReport
+
+        report = QCReport(
+            total_samples=100,
+            valid_samples=100,
+            dropped_samples=0,
+            schema_pass_rate=0.99,
+            dedup_rate=0.0,
+            tool_coverage={},
+            scenario_coverage={},
+            issues=[],
+        )
+
+        error = QCFailedError(report, threshold=0.98, min_samples=10)
+
+        assert len(error.remediation) > 0
+        assert any("--fix" in r for r in error.remediation)
+        assert any("--threshold" in r for r in error.remediation)

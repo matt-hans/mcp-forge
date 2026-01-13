@@ -12,6 +12,7 @@ from .formatter import (
 from .qc import (
     DataQualityController,
     QCConfig,
+    QCFailedError,
     QCIssue,
     ValidatedSample,
 )
@@ -22,6 +23,7 @@ __all__ = [
     # QC (existing)
     "DataQualityController",
     "QCConfig",
+    "QCFailedError",
     "QCIssue",
     "ValidatedSample",
     # Synthesis (new)

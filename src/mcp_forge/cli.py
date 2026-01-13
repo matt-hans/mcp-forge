@@ -191,9 +191,54 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state.update_stage(PipelineStage.QC_VALIDATING)
         state_manager.save_state(state)
 
-        # TODO: Implement QC validation
-        console.print("   [yellow]QC validation not yet implemented[/yellow]")
-        state.training_data_path = str(state_manager.get_data_path("train.jsonl"))
+        from mcp_forge.config import load_config
+        from mcp_forge.data.qc import DataQualityController, QCConfig, QCFailedError
+
+        # Load QC thresholds from config
+        forge_config = load_config()
+
+        qc_config = QCConfig(
+            schema_pass_threshold=forge_config.qc_schema_pass_threshold,
+            min_samples_per_tool=forge_config.qc_min_samples_per_tool,
+            dedup_enabled=forge_config.qc_dedup_enabled,
+            auto_repair=False,  # Don't auto-repair in pipeline, explicit --fix needed
+            require_scenario_coverage=forge_config.qc_require_scenario_coverage,
+        )
+
+        qc = DataQualityController(state.tools, qc_config)
+
+        # Get training data path
+        training_data_path = Path(state.training_data_path) if state.training_data_path else state_manager.get_data_path("train.jsonl")
+
+        console.print(f"   Validating: {training_data_path}")
+        report, validated = qc.validate_dataset(training_data_path)
+
+        # Store report in state
+        state.qc_report = report
+        state_manager.save_state(state)
+
+        # Save report to disk
+        report_path = state_manager.save_qc_report(report)
+        console.print(f"   Report saved: {report_path}")
+
+        # Print summary
+        console.print(f"   Samples: {report.total_samples} total, {report.valid_samples} valid")
+        console.print(f"   Schema pass rate: {report.schema_pass_rate:.1%}")
+        console.print(f"   Dedup rate: {report.dedup_rate:.1%}")
+
+        # Check if passes threshold
+        if not report.passes_threshold(qc_config.schema_pass_threshold, qc_config.min_samples_per_tool):
+            console.print("\n[red]QC validation failed![/red]")
+            qc.print_report(report)
+
+            # Raise blocking error
+            raise QCFailedError(
+                report=report,
+                threshold=qc_config.schema_pass_threshold,
+                min_samples=qc_config.min_samples_per_tool,
+            )
+
+        console.print("   [green]✓[/green] QC validation passed")
 
     # Stage 4: Training
     if state.stage in (PipelineStage.QC_VALIDATING, PipelineStage.TRAINING):
