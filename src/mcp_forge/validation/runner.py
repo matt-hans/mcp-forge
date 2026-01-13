@@ -295,3 +295,109 @@ class ValidationRunner:
         )
 
         return validation_result
+
+
+def generate_validation_samples(
+    tools: list[ToolDefinition],
+    count: int = 20,
+    include_no_tool: bool = True,
+    seed: int = 42,
+) -> list[ValidationSample]:
+    """Generate validation samples from tool definitions.
+
+    Creates diverse test prompts for each tool, ensuring coverage
+    of different argument combinations and edge cases.
+
+    Args:
+        tools: Tool definitions to generate samples for
+        count: Total number of samples to generate
+        include_no_tool: Whether to include no-tool test cases
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of ValidationSample objects
+    """
+    import random
+
+    rng = random.Random(seed)
+
+    samples: list[ValidationSample] = []
+
+    # Templates for generating prompts
+    WEATHER_PROMPTS = [
+        "What's the weather in {location}?",
+        "Is it going to rain in {location} today?",
+        "Tell me the current temperature in {location}.",
+        "What should I wear in {location} based on the weather?",
+    ]
+
+    FILESYSTEM_PROMPTS = [
+        "List the files in {path}.",
+        "What files are in the {path} directory?",
+        "Show me what's inside {path}.",
+    ]
+
+    NO_TOOL_PROMPTS = [
+        "What is the capital of France?",
+        "How do I make pasta?",
+        "Tell me a joke.",
+        "What year did World War II end?",
+    ]
+
+    # Generate tool-specific samples
+    samples_per_tool = count // len(tools) if tools else 0
+
+    for tool in tools:
+        if tool.name == "get_weather":
+            locations = ["Paris", "London", "Tokyo", "New York", "Sydney"]
+            for i in range(samples_per_tool):
+                location = rng.choice(locations)
+                prompt = rng.choice(WEATHER_PROMPTS).format(location=location)
+                samples.append(
+                    ValidationSample(
+                        prompt=prompt,
+                        expected_tool="get_weather",
+                        expected_args={"location": location},
+                    )
+                )
+
+        elif tool.name == "list_files":
+            paths = ["/home/user/documents", "/home/user/projects", "/tmp"]
+            for i in range(samples_per_tool):
+                path = rng.choice(paths)
+                prompt = rng.choice(FILESYSTEM_PROMPTS).format(path=path)
+                samples.append(
+                    ValidationSample(
+                        prompt=prompt,
+                        expected_tool="list_files",
+                        expected_args={"path": path},
+                    )
+                )
+
+        else:
+            # Generic sample generation for unknown tools
+            for i in range(samples_per_tool):
+                samples.append(
+                    ValidationSample(
+                        prompt=f"Use the {tool.name} tool with default arguments.",
+                        expected_tool=tool.name,
+                        expected_args={},
+                    )
+                )
+
+    # Add no-tool samples
+    if include_no_tool:
+        no_tool_count = max(1, count // 5)  # ~20% no-tool
+        for prompt in rng.sample(
+            NO_TOOL_PROMPTS, min(no_tool_count, len(NO_TOOL_PROMPTS))
+        ):
+            samples.append(
+                ValidationSample(
+                    prompt=prompt,
+                    expected_tool=None,
+                    expected_args=None,
+                )
+            )
+
+    rng.shuffle(samples)
+    return samples[:count]
