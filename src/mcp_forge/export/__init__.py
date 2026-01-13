@@ -1,9 +1,18 @@
-"""GGUF export module for MCP-Forge.
+"""GGUF export and bundle packaging module for MCP-Forge.
 
-Provides conversion of LoRA-tuned models to GGUF format for deployment
-with llama.cpp, Ollama, and other inference engines.
+Provides:
+- Conversion of LoRA-tuned models to GGUF format for deployment
+  with llama.cpp, Ollama, and other inference engines.
+- Bundle packaging for distributable agent bundles containing
+  model, tools, and deployment configuration.
 """
 
+from mcp_forge.export.bundle import (
+    BundleConfig,
+    BundleEngine,
+    BundleResult,
+    verify_bundle,
+)
 from mcp_forge.export.config import (
     ExportConfig,
     ExportResult,
@@ -25,4 +34,9 @@ __all__ = [
     # Metadata
     "GGUFMetadata",
     "read_gguf_metadata",
+    # Bundle
+    "BundleConfig",
+    "BundleEngine",
+    "BundleResult",
+    "verify_bundle",
 ]
