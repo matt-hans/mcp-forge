@@ -383,9 +383,56 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state.update_stage(PipelineStage.EXPORTING)
         state_manager.save_state(state)
 
+        from mcp_forge.export import ExportConfig, ExportEngine, QuantizationType
+        from mcp_forge.export.metadata import GGUFMetadata
+
+        # Determine output path
+        output_dir = Path(state.output_path)
+        gguf_path = output_dir / f"{state.model_family}.{state.quantization}.gguf"
+
         console.print(f"   Format: {state.quantization}")
-        # TODO: Implement export
-        console.print("   [yellow]Export not yet implemented[/yellow]")
+        console.print(f"   Output: {gguf_path}")
+
+        config = ExportConfig(
+            adapter_path=Path(state.lora_adapter_path),
+            output_path=gguf_path,
+            base_model=state.model_family,
+            quantization=QuantizationType(state.quantization),
+        )
+
+        # Build metadata from pipeline state
+        metadata = GGUFMetadata(
+            model_name=f"mcp-forge-{state.model_family}",
+            model_family=state.model_family,
+            tool_names=[t.name for t in state.tools],
+            training_timestamp=state.created_at,
+        )
+        if state.validation_result:
+            metadata.tool_accuracy = state.validation_result.tool_selection_accuracy
+            metadata.schema_conformance = state.validation_result.schema_conformance_rate
+        if state.benchmark_result:
+            metadata.benchmark_score = state.benchmark_result.overall_score
+
+        engine = ExportEngine(config)
+
+        def on_progress(stage: str, pct: float) -> None:
+            console.print(f"   [{pct:.0%}] {stage}")
+
+        result = engine.export(metadata=metadata, progress_callback=on_progress)
+
+        if result.success:
+            state.gguf_path = str(result.output_path)
+            state_manager.save_state(state)
+
+            console.print(f"   Size: {result.gguf_size_mb:.1f} MB")
+            console.print(f"   Compression: {result.compression_ratio:.1f}x")
+            console.print("   [green]Export complete[/green]")
+        else:
+            console.print(f"   [red]Export failed: {result.error}[/red]")
+            state.error = result.error
+            state.update_stage(PipelineStage.FAILED)
+            state_manager.save_state(state)
+            raise SystemExit(1)
 
     # Stage 8: Package
     if state.stage in (PipelineStage.EXPORTING, PipelineStage.PACKAGING):
@@ -1198,11 +1245,142 @@ def benchmark(
 
 @cli.command("export")
 @click.option("--model", "-m", required=True, type=click.Path(exists=True), help="Path to LoRA adapter")
-@click.option("--format", "quant_format", type=click.Choice(["q8_0", "q4_k_m"]), default="q8_0")
+@click.option("--format", "quant_format", type=click.Choice(["q8_0", "q4_k_m", "q4_k_s", "q5_k_m", "f16"]), default="q8_0", help="Quantization format")
 @click.option("--output", "-o", required=True, help="Output GGUF file path")
-def export_model(model: str, quant_format: str, output: str):
-    """Export model to GGUF format."""
-    console.print("[yellow]GGUF export coming soon[/yellow]")
+@click.option("--base-model", help="Base model (auto-detected from adapter if not specified)")
+@click.option("--no-verify", is_flag=True, help="Skip GGUF verification after export")
+@click.pass_context
+def export_model(
+    ctx: click.Context,
+    model: str,
+    quant_format: str,
+    output: str,
+    base_model: str | None,
+    no_verify: bool,
+) -> None:
+    """Export LoRA adapter to GGUF format.
+
+    Merges the LoRA adapter with the base model and converts to
+    quantized GGUF format for deployment with llama.cpp or Ollama.
+
+    \b
+    Quantization Formats:
+      q8_0   - 8-bit, best quality (default)
+      q4_k_m - 4-bit k-quant, good balance
+      q4_k_s - 4-bit k-quant small
+      q5_k_m - 5-bit k-quant medium
+      f16    - Half precision (no quantization)
+
+    \b
+    Example:
+      mcp-forge export -m ./adapter -o model.gguf --format q4_k_m
+    """
+    from pathlib import Path
+
+    from mcp_forge.export import ExportConfig, ExportEngine, QuantizationType
+    from mcp_forge.export.metadata import GGUFMetadata
+
+    console.print("\n[bold]MCP-Forge GGUF Export[/bold]")
+    console.print("=" * 50)
+
+    adapter_path = Path(model)
+    output_path = Path(output)
+
+    # Ensure output has .gguf extension
+    if not output_path.suffix == ".gguf":
+        output_path = output_path.with_suffix(".gguf")
+
+    console.print(f"Adapter: {adapter_path}")
+    console.print(f"Output: {output_path}")
+    console.print(f"Quantization: {quant_format}")
+
+    # Detect base model from adapter config if not specified
+    detected_base = base_model
+    if not detected_base:
+        adapter_config = adapter_path / "adapter_config.json"
+        if adapter_config.exists():
+            import json
+            with open(adapter_config) as f:
+                config_data = json.load(f)
+            detected_base = config_data.get("base_model_name_or_path", "")
+            console.print(f"Detected base model: {detected_base}")
+
+    if not detected_base:
+        detected_base = "unsloth/DeepSeek-R1-Distill-Qwen-7B"
+        console.print(f"[yellow]Using default base model: {detected_base}[/yellow]")
+
+    # Create config
+    config = ExportConfig(
+        adapter_path=adapter_path,
+        output_path=output_path,
+        base_model=detected_base,
+        quantization=QuantizationType(quant_format),
+        verify_after_export=not no_verify,
+    )
+
+    # Build metadata
+    state_manager: StateManager | None = ctx.obj.get("state_manager") if ctx.obj else None
+    metadata = GGUFMetadata(
+        model_name=adapter_path.name,
+        model_family=detected_base.split("/")[-1] if "/" in detected_base else detected_base,
+        quantization_type=quant_format,
+    )
+
+    # If we have pipeline state, enrich metadata
+    if state_manager:
+        try:
+            state = state_manager.load_state()
+            if state:
+                metadata.tool_names = [t.name for t in state.tools]
+                metadata.tool_count = len(state.tools)
+                if state.validation_result:
+                    metadata.tool_accuracy = state.validation_result.tool_selection_accuracy
+                    metadata.schema_conformance = state.validation_result.schema_conformance_rate
+                if state.benchmark_result:
+                    metadata.benchmark_score = state.benchmark_result.overall_score
+        except Exception:
+            pass  # No state available, continue without
+
+    engine = ExportEngine(config)
+
+    # Run export with progress
+    console.print("\nStarting export...")
+
+    def on_progress(stage: str, pct: float) -> None:
+        console.print(f"  [{pct:.0%}] {stage}")
+
+    try:
+        result = engine.export(metadata=metadata, progress_callback=on_progress)
+    except Exception as e:
+        console.print(f"\n[red]Export failed: {e}[/red]")
+        raise SystemExit(1) from e
+
+    # Display results
+    console.print("\n" + "=" * 50)
+
+    if result.success:
+        console.print("[bold green]Export successful![/bold green]")
+        console.print(f"\nOutput: {result.output_path}")
+        console.print(f"Size: {result.gguf_size_mb:.1f} MB")
+        console.print(f"Compression: {result.compression_ratio:.1f}x")
+        console.print(f"Time: {result.total_time_seconds:.1f}s")
+
+        if result.verified:
+            console.print("[green]Verification: PASSED[/green]")
+        elif no_verify:
+            console.print("[yellow]Verification: SKIPPED[/yellow]")
+
+        # Save export report
+        if state_manager:
+            state_manager.ensure_dirs()
+            import json
+            report_path = state_manager.get_report_path("export_latest.json")
+            with open(report_path, "w") as f:
+                json.dump(result.to_dict(), f, indent=2)
+            console.print(f"\nReport: {report_path}")
+    else:
+        console.print(f"[red]Export failed: {result.error}[/red]")
+        raise SystemExit(1)
 
 
 @cli.command()
