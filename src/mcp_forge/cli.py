@@ -416,11 +416,38 @@ def tools_import(from_file: str, output: str, fmt: str):
 @click.option("--tools", "-t", required=True, type=click.Path(exists=True), help="Tools JSON file")
 @click.option("--fix", is_flag=True, help="Auto-repair and rewrite cleaned data")
 @click.option("--output", "-o", help="Output file for cleaned data")
+@click.option("--threshold", "-T", type=float, help="Schema pass rate threshold (default: 0.98)")
+@click.option("--min-samples", type=int, help="Minimum samples per tool (default: 10)")
+@click.option("--no-dedup", is_flag=True, help="Disable duplicate detection")
+@click.option("--no-auto-repair", is_flag=True, help="Disable auto-repair of minor issues")
+@click.option("--strict", is_flag=True, help="Fail on warnings, not just errors")
 @click.pass_context
-def qa(ctx, data: str, tools: str, fix: bool, output: str | None):
-    """Run dataset quality analysis and optional cleanup."""
+def qa(
+    ctx,
+    data: str,
+    tools: str,
+    fix: bool,
+    output: str | None,
+    threshold: float | None,
+    min_samples: int | None,
+    no_dedup: bool,
+    no_auto_repair: bool,
+    strict: bool,
+):
+    """Run dataset quality analysis and optional cleanup.
+
+    Validates training data against tool schemas and reports issues.
+    Use --fix to auto-repair and output cleaned data.
+
+    \b
+    Threshold Precedence:
+      1. CLI flags (--threshold, --min-samples)
+      2. Config file (.mcp-forge/config.yaml)
+      3. Default values
+    """
     import json
 
+    from mcp_forge.config import load_config, merge_config_with_cli
     from mcp_forge.data.qc import DataQualityController, QCConfig
     from mcp_forge.state import ToolDefinition
 
@@ -430,8 +457,26 @@ def qa(ctx, data: str, tools: str, fix: bool, output: str | None):
     with open(tools) as f:
         tool_defs = [ToolDefinition.from_dict(t) for t in json.load(f)]
 
-    # Configure QC
-    config = QCConfig(auto_repair=fix)
+    # Load config and merge with CLI options
+    forge_config = load_config()
+    forge_config = merge_config_with_cli(
+        forge_config,
+        threshold=threshold,
+        min_samples=min_samples,
+        no_dedup=no_dedup,
+        no_auto_repair=no_auto_repair,
+        strict=strict,
+    )
+
+    # Configure QC from merged config
+    config = QCConfig(
+        schema_pass_threshold=forge_config.qc_schema_pass_threshold,
+        min_samples_per_tool=forge_config.qc_min_samples_per_tool,
+        dedup_enabled=forge_config.qc_dedup_enabled,
+        auto_repair=fix and forge_config.qc_auto_repair,  # Only repair if --fix is set
+        require_scenario_coverage=forge_config.qc_require_scenario_coverage,
+        scenario_targets=forge_config.qc_scenario_targets,
+    )
     qc = DataQualityController(tool_defs, config)
 
     # Determine output path
@@ -450,6 +495,22 @@ def qa(ctx, data: str, tools: str, fix: bool, output: str | None):
     state_manager: StateManager = ctx.obj["state_manager"]
     report_path = state_manager.save_qc_report(report)
     console.print(f"[green]Report saved to {report_path}[/green]")
+
+    # In strict mode, fail on any warnings
+    has_warnings = any(issue.get("severity") == "warning" for issue in report.issues)
+    passes = report.passes_threshold(config.schema_pass_threshold, config.min_samples_per_tool)
+
+    if not passes or (strict and has_warnings):
+        console.print("\n[red]QC validation failed![/red]")
+        if not passes:
+            console.print(f"  Schema pass rate: {report.schema_pass_rate:.1%} (threshold: {config.schema_pass_threshold:.1%})")
+        if strict and has_warnings:
+            console.print(f"  Strict mode: {sum(1 for i in report.issues if i.get('severity') == 'warning')} warnings found")
+        console.print("\n[yellow]Suggestions:[/yellow]")
+        console.print("  - Run with --fix to auto-repair fixable issues")
+        console.print("  - Lower threshold with --threshold 0.95")
+        console.print("  - Review issues in the report above")
+        raise SystemExit(1)
 
 
 @cli.command()

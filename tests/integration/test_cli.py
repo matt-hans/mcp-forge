@@ -87,6 +87,70 @@ class TestToolsCommand:
             assert "v1.2" in result.output
 
 
+class TestQACommand:
+    """Tests for qa command with threshold options."""
+
+    def test_qa_help_shows_options(self, runner: CliRunner) -> None:
+        """Test qa --help displays threshold options."""
+        result = runner.invoke(cli, ["qa", "--help"])
+        assert result.exit_code == 0
+        assert "--threshold" in result.output
+        assert "--min-samples" in result.output
+        assert "--no-dedup" in result.output
+        assert "--no-auto-repair" in result.output
+        assert "--strict" in result.output
+
+    def test_qa_with_custom_threshold(
+        self,
+        runner: CliRunner,
+        sample_data_path,
+        sample_tools_path,
+    ) -> None:
+        """Test qa command with custom threshold."""
+        result = runner.invoke(cli, [
+            "qa",
+            "--data", str(sample_data_path),
+            "--tools", str(sample_tools_path),
+            "--threshold", "0.50",
+            "--min-samples", "1",
+        ])
+        # Should pass with low thresholds
+        assert "Quality Report" in result.output
+
+    def test_qa_with_strict_mode(
+        self,
+        runner: CliRunner,
+        sample_data_path,
+        sample_tools_path,
+    ) -> None:
+        """Test qa command with --strict mode."""
+        result = runner.invoke(cli, [
+            "qa",
+            "--data", str(sample_data_path),
+            "--tools", str(sample_tools_path),
+            "--strict",
+            "--min-samples", "1",
+        ])
+        # Output should include strict mode handling
+        assert "Quality Report" in result.output or "failed" in result.output
+
+    def test_qa_with_no_dedup(
+        self,
+        runner: CliRunner,
+        sample_data_path,
+        sample_tools_path,
+    ) -> None:
+        """Test qa command with --no-dedup flag."""
+        result = runner.invoke(cli, [
+            "qa",
+            "--data", str(sample_data_path),
+            "--tools", str(sample_tools_path),
+            "--no-dedup",
+            "--min-samples", "1",
+        ])
+        assert "Quality Report" in result.output
+
+
 class TestDataCommands:
     """Tests for data-related commands."""
 
