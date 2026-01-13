@@ -13,9 +13,10 @@ import logging
 import os
 import random
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import openai
 from openai import APIError, RateLimitError
@@ -319,7 +320,7 @@ Return ONLY valid JSON with the new arguments, nothing else."""
                     tools=[ToolDefinition.from_dict(t) for t in self._get_tools_from_sample(seed_sample)],
                 )
 
-            except (APIError, RateLimitError) as e:
+            except (APIError, RateLimitError):
                 if attempt < self.config.max_retries - 1:
                     delay = self.config.retry_delay * (2**attempt)
                     await asyncio.sleep(delay)
@@ -411,7 +412,7 @@ Return ONLY valid JSON with the new arguments, nothing else."""
                     tools=[ToolDefinition.from_dict(t) for t in self._get_tools_from_sample(seed_sample)],
                 )
 
-            except (APIError, RateLimitError) as e:
+            except (APIError, RateLimitError):
                 if attempt < self.config.max_retries - 1:
                     delay = self.config.retry_delay * (2**attempt)
                     await asyncio.sleep(delay)

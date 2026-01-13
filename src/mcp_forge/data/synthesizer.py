@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from mcp_forge.data.augmenter import AugmenterConfig, DataAugmenter
 from mcp_forge.data.qc import DataQualityController, QCConfig

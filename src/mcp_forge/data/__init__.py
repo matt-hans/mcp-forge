@@ -1,6 +1,6 @@
 """Data synthesis and quality control layer."""
 
-from .augmenter import AugmenterConfig, AugmentationResult, DataAugmenter
+from .augmenter import AugmentationResult, AugmenterConfig, DataAugmenter
 from .formatter import (
     create_training_sample,
     format_system_prompt,
