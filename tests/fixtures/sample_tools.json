@@ -1,0 +1,53 @@
+[
+  {
+    "name": "get_weather",
+    "description": "Get current weather for a location",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "description": "City name"
+        },
+        "units": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"],
+          "default": "celsius"
+        }
+      },
+      "required": ["location"]
+    }
+  },
+  {
+    "name": "search_files",
+    "description": "Search for files matching a pattern",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern to match"
+        },
+        "directory": {
+          "type": "string",
+          "description": "Directory to search in"
+        }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "calculate",
+    "description": "Perform a mathematical calculation",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "expression": {
+          "type": "string",
+          "description": "Mathematical expression to evaluate"
+        }
+      },
+      "required": ["expression"]
+    }
+  }
+]
