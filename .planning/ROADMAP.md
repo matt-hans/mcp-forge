@@ -102,25 +102,26 @@ Transform the existing prototype into a complete, production-ready CLI pipeline 
 
 ---
 
-## Phase 5: Training Engine
+## Phase 5: Training Engine ✅
+
+**Status**: Complete (2026-01-13)
+**Plans**: 1 | **Commits**: 3 | **Tests**: +39
 
 **Goal**: Implement the TRAINING stage with Unsloth + LoRA fine-tuning.
 
-**Scope**:
-- Create `training/engine.py` for Unsloth training wrapper
-- Implement training profiles (fast_dev, balanced, max_quality)
-- Add DeepSeek-R1-Distill-8B and Qwen-2.5-14B-Instruct support
-- Implement checkpoint saving during training
-- Add training progress reporting
-
-**Research Needed**: Unsloth API, LoRA configuration for tool-calling, ChatML template handling
+**Deliverables**:
+- Training module structure (config.py, callbacks.py, engine.py)
+- TrainingProfile with fast_dev, balanced, max_quality presets
+- TrainingEngine with load_model, prepare_dataset, train methods
+- ForgeProgressCallback for pipeline state updates
+- CLI pipeline Stage 4 integration and standalone train command
 
 **Acceptance Criteria**:
-- [ ] `mcp-forge train --data train.jsonl --model deepseek-r1` initiates training
-- [ ] Training profiles adjust hyperparameters correctly
-- [ ] Both supported models train without errors
-- [ ] Training checkpoints saved at configurable intervals
-- [ ] Progress displayed in terminal with loss/metrics
+- [x] `mcp-forge train --data train.jsonl --model deepseek-r1` initiates training
+- [x] Training profiles adjust hyperparameters correctly
+- [x] Both supported models train without errors
+- [x] Training checkpoints saved at configurable intervals
+- [x] Progress displayed in terminal with loss/metrics
 
 ---
 
@@ -220,7 +221,7 @@ Transform the existing prototype into a complete, production-ready CLI pipeline 
 | 2 | Test Infrastructure | ✅ Complete | 103 |
 | 3 | Data Synthesis Engine | ✅ Complete | 146 |
 | 4 | QC Gate Integration | ✅ Complete | 203 |
-| 5 | Training Engine | Pending | - |
+| 5 | Training Engine | ✅ Complete | 242 |
 | 6 | Looped Validation | Pending | - |
 | 7 | Benchmark Suite | Pending | - |
 | 8 | GGUF Export | Pending | - |
