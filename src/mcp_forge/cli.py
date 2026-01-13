@@ -165,9 +165,25 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state.update_stage(PipelineStage.SYNTHESIZING)
         state_manager.save_state(state)
 
-        # TODO: Implement actual data synthesis
-        console.print("   [yellow]Data synthesis not yet implemented[/yellow]")
-        state.seed_data_path = str(state_manager.get_data_path("seed.jsonl"))
+        from mcp_forge.data import DataSynthesizer
+
+        synthesizer = DataSynthesizer(
+            tools=state.tools,
+            plan=state.synthesis_plan,
+            output_dir=state_manager.data_dir,
+        )
+
+        with console.status("[bold green]Generating training data..."):
+            result = asyncio.run(synthesizer.synthesize(
+                progress_callback=lambda msg: console.print(f"   {msg}")
+            ))
+
+        state.seed_data_path = str(result.seed_path)
+        state.training_data_path = str(result.training_path)
+
+        console.print(f"   [green]✓[/green] Generated {result.seed_count} seed samples")
+        console.print(f"   [green]✓[/green] Augmented to {result.total_count} total samples")
+        console.print(f"   [green]✓[/green] QC: {'PASSED' if result.qc_passed else 'FAILED'}")
 
     # Stage 3: QC Validation
     if state.stage in (PipelineStage.SYNTHESIZING, PipelineStage.QC_VALIDATING):
@@ -437,13 +453,75 @@ def qa(ctx, data: str, tools: str, fix: bool, output: str | None):
 
 
 @cli.command()
-@click.option("--data", "-d", required=True, type=click.Path(exists=True), help="Training data JSONL file")
-@click.option("--tools", "-t", required=True, type=click.Path(exists=True), help="Tools JSON file")
+@click.option("--server", "-s", help="MCP server command to extract tools from")
+@click.option("--tools", "-t", type=click.Path(exists=True), help="Tools JSON file (alternative to --server)")
 @click.option("--samples", default=500, help="Total samples to generate")
-@click.option("--output", "-o", required=True, help="Output JSONL file")
-def generate(data: str, tools: str, samples: int, output: str):
+@click.option("--seed-samples", default=100, help="Number of seed samples to generate")
+@click.option("--output", "-o", required=True, type=click.Path(), help="Output JSONL file")
+def generate(server: str | None, tools: str | None, samples: int, seed_samples: int, output: str):
     """Generate training data (seed + augmentation)."""
-    console.print("[yellow]Data generation coming soon[/yellow]")
+    import json
+
+    from mcp_forge.data import DataSynthesizer
+    from mcp_forge.state import SynthesisPlan, ToolDefinition
+    from mcp_forge.tools.inspector import inspect_mcp_server
+
+    if not server and not tools:
+        console.print("[red]Error: Either --server or --tools is required[/red]")
+        raise SystemExit(1)
+
+    console.print("\n[bold]MCP-Forge Data Generation[/bold]")
+    console.print("=" * 50)
+
+    # Load tools
+    if tools:
+        console.print(f"Loading tools from {tools}...")
+        with open(tools) as f:
+            tool_list = [ToolDefinition.from_dict(t) for t in json.load(f)]
+    else:
+        console.print(f"Inspecting MCP server: {server}")
+        tool_list = asyncio.run(inspect_mcp_server(server))
+
+    console.print(f"Found {len(tool_list)} tools")
+
+    # Create synthesis plan
+    plan = SynthesisPlan(
+        total_samples=samples,
+        seed_samples=min(seed_samples, samples // 2),
+        augmented_samples=samples - min(seed_samples, samples // 2),
+    )
+
+    # Create output directory
+    output_path = Path(output)
+    output_dir = output_path.parent if output_path.suffix else output_path
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Run synthesis
+    synthesizer = DataSynthesizer(
+        tools=tool_list,
+        plan=plan,
+        output_dir=output_dir,
+    )
+
+    console.print(f"\nGenerating {samples} samples ({plan.seed_samples} seeds)...\n")
+
+    result = asyncio.run(synthesizer.synthesize(
+        progress_callback=lambda msg: console.print(f"  {msg}")
+    ))
+
+    # Rename output if specific file requested
+    if output_path.suffix:
+        import shutil
+        shutil.move(result.training_path, output_path)
+        console.print(f"\n[green]Output saved to {output_path}[/green]")
+    else:
+        console.print(f"\n[green]Output saved to {result.training_path}[/green]")
+
+    console.print(f"\nResults:")
+    console.print(f"  Seeds: {result.seed_count}")
+    console.print(f"  Augmented: {result.augmented_count}")
+    console.print(f"  Total: {result.total_count}")
+    console.print(f"  QC: {'[green]PASSED[/green]' if result.qc_passed else '[red]FAILED[/red]'}")
 
 
 # =============================================================================
