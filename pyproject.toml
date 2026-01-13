@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-forge"
+version = "0.1.0"
+description = "Fine-tune local LLMs on MCP server tool schemas"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "MCP-Forge Team" }
+]
+keywords = ["llm", "mcp", "fine-tuning", "tool-use", "ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "mcp>=1.0.0",
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "aiofiles>=23.0.0",
+    "jsonschema>=4.0.0",
+    # Unsloth and ML deps - these require CUDA
+    "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git",
+    "torch>=2.1.0",
+    "transformers>=4.40.0",
+    "datasets>=2.18.0",
+    "trl>=0.8.0",
+    "bitsandbytes>=0.43.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+mcp-forge = "mcp_forge.cli:main"
+forge = "mcp_forge.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yourorg/mcp-forge"
+Documentation = "https://github.com/yourorg/mcp-forge#readme"
+Repository = "https://github.com/yourorg/mcp-forge"
+Issues = "https://github.com/yourorg/mcp-forge/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_forge"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
