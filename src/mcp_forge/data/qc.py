@@ -31,6 +31,7 @@ class QCConfig:
     dedup_enabled: bool = True
     require_scenario_coverage: bool = True
     auto_repair: bool = True  # Attempt to fix minor issues
+    max_response_length: int = 4096  # Max assistant response length
 
     # Scenario targets (used for coverage checking)
     scenario_targets: dict[str, float] = field(default_factory=lambda: {
@@ -40,6 +41,35 @@ class QCConfig:
         "ambiguous": 0.10,
         "edge": 0.05
     })
+
+
+@dataclass
+class RepairStats:
+    """Statistics about repair operations during QC."""
+
+    repairs_attempted: int = 0
+    repairs_successful: int = 0
+    repair_details: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(self, sample_id: str, repair_type: str, success: bool, details: str = "") -> None:
+        """Record a repair attempt."""
+        self.repairs_attempted += 1
+        if success:
+            self.repairs_successful += 1
+        self.repair_details.append({
+            "sample_id": sample_id,
+            "repair_type": repair_type,
+            "success": success,
+            "details": details,
+        })
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "repairs_attempted": self.repairs_attempted,
+            "repairs_successful": self.repairs_successful,
+            "repair_details": self.repair_details,
+        }
 
 
 @dataclass
@@ -181,23 +211,27 @@ class DataQualityController:
         # Track state
         self.issues: list[QCIssue] = []
         self.seen_hashes: set[str] = set()
+        self.repair_stats = RepairStats()
 
     def validate_dataset(
         self,
         data_path: Path,
-        output_path: Path | None = None
+        output_path: Path | None = None,
+        dry_run: bool = False,
     ) -> tuple[QCReport, list[ValidatedSample]]:
         """Validate entire dataset and optionally write cleaned version.
 
         Args:
             data_path: Path to input JSONL file
             output_path: Optional path to write validated samples
+            dry_run: If True, don't write files (preview repairs only)
 
         Returns:
             Tuple of (QCReport, list of validated samples)
         """
         self.issues = []
         self.seen_hashes = set()
+        self.repair_stats = RepairStats()
 
         validated_samples: list[ValidatedSample] = []
         tool_coverage: dict[str, int] = defaultdict(int)
@@ -262,8 +296,8 @@ class DataQualityController:
             issues=[i.to_dict() for i in self.issues]
         )
 
-        # Write cleaned output if requested
-        if output_path:
+        # Write cleaned output if requested (unless dry_run)
+        if output_path and not dry_run:
             with open(output_path, "w") as f:
                 for sample in validated_samples:
                     f.write(json.dumps(sample.to_dict()) + "\n")
@@ -519,3 +553,182 @@ class DataQualityController:
             console.print("\n[green]Dataset passes quality gate[/green]")
         else:
             console.print("\n[red]Dataset fails quality gate[/red]")
+
+        # Repair stats if any repairs were attempted
+        if self.repair_stats.repairs_attempted > 0:
+            console.print("\n[bold]Repair Statistics:[/bold]")
+            console.print(f"  Attempted: {self.repair_stats.repairs_attempted}")
+            console.print(f"  Successful: {self.repair_stats.repairs_successful}")
+            if self.repair_stats.repairs_attempted > 0:
+                success_rate = self.repair_stats.repairs_successful / self.repair_stats.repairs_attempted
+                console.print(f"  Success rate: {success_rate:.1%}")
+
+    # =========================================================================
+    # Repair Handlers
+    # =========================================================================
+
+    def _repair_truncated_response(
+        self,
+        sample: dict[str, Any],
+        sample_id: str,
+    ) -> bool:
+        """Truncate overly long assistant responses.
+
+        Returns True if repair was successful.
+        """
+        messages = sample.get("messages", [])
+        repaired = False
+
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                if len(content) > self.config.max_response_length:
+                    # Find a safe truncation point (end of sentence or paragraph)
+                    truncate_at = self.config.max_response_length
+                    for sep in ["\n\n", "\n", ". ", "! ", "? "]:
+                        last_sep = content[:truncate_at].rfind(sep)
+                        if last_sep > truncate_at // 2:
+                            truncate_at = last_sep + len(sep)
+                            break
+
+                    msg["content"] = content[:truncate_at].rstrip()
+                    self.repair_stats.record(
+                        sample_id,
+                        "truncated_response",
+                        True,
+                        f"Truncated from {len(content)} to {truncate_at} chars",
+                    )
+                    repaired = True
+
+        return repaired
+
+    def _repair_whitespace(
+        self,
+        sample: dict[str, Any],
+        sample_id: str,
+    ) -> bool:
+        """Normalize whitespace in messages.
+
+        - Removes leading/trailing whitespace
+        - Normalizes multiple spaces to single space
+        - Normalizes line endings
+
+        Returns True if repair was successful.
+        """
+        messages = sample.get("messages", [])
+        repaired = False
+
+        for msg in messages:
+            content = msg.get("content", "")
+            if not content:
+                continue
+
+            original = content
+
+            # Normalize line endings
+            content = content.replace("\r\n", "\n").replace("\r", "\n")
+
+            # Remove trailing whitespace from each line
+            lines = [line.rstrip() for line in content.split("\n")]
+            content = "\n".join(lines)
+
+            # Strip leading/trailing whitespace
+            content = content.strip()
+
+            if content != original:
+                msg["content"] = content
+                repaired = True
+
+        if repaired:
+            self.repair_stats.record(
+                sample_id,
+                "whitespace",
+                True,
+                "Normalized whitespace",
+            )
+
+        return repaired
+
+    def _repair_encoding(
+        self,
+        sample: dict[str, Any],
+        sample_id: str,
+    ) -> bool:
+        """Fix common encoding issues in messages.
+
+        - Replaces common mojibake patterns
+        - Removes null bytes
+        - Normalizes unicode
+
+        Returns True if repair was successful.
+        """
+        import unicodedata
+
+        messages = sample.get("messages", [])
+        repaired = False
+
+        # Common problematic character replacements
+        replacements = {
+            "\x00": "",  # Null bytes
+            "\ufffd": "",  # Replacement character (unknown encoding)
+        }
+
+        for msg in messages:
+            content = msg.get("content", "")
+            if not content:
+                continue
+
+            original = content
+
+            # Apply replacements
+            for old, new in replacements.items():
+                content = content.replace(old, new)
+
+            # Normalize unicode to NFC form
+            content = unicodedata.normalize("NFC", content)
+
+            if content != original:
+                msg["content"] = content
+                repaired = True
+
+        if repaired:
+            self.repair_stats.record(
+                sample_id,
+                "encoding",
+                True,
+                "Fixed encoding issues",
+            )
+
+        return repaired
+
+    def repair_sample(
+        self,
+        sample: dict[str, Any],
+        sample_id: str,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Apply all applicable repairs to a sample.
+
+        Args:
+            sample: The sample to repair
+            sample_id: Sample identifier for logging
+
+        Returns:
+            Tuple of (was_repaired, repaired_sample)
+        """
+        # Make a copy to avoid modifying original
+        import copy
+        repaired_sample = copy.deepcopy(sample)
+
+        any_repaired = False
+
+        # Apply repairs in order of priority
+        if self._repair_encoding(repaired_sample, sample_id):
+            any_repaired = True
+
+        if self._repair_whitespace(repaired_sample, sample_id):
+            any_repaired = True
+
+        if self._repair_truncated_response(repaired_sample, sample_id):
+            any_repaired = True
+
+        return any_repaired, repaired_sample

@@ -13,6 +13,7 @@ from mcp_forge.data.qc import (
     QCConfig,
     QCFailedError,
     QCIssue,
+    RepairStats,
     ValidatedSample,
 )
 from mcp_forge.state import ToolDefinition
@@ -617,3 +618,205 @@ class TestQCFailedError:
         assert len(error.remediation) > 0
         assert any("--fix" in r for r in error.remediation)
         assert any("--threshold" in r for r in error.remediation)
+
+
+class TestRepairStats:
+    """Tests for RepairStats tracking."""
+
+    def test_initial_state(self) -> None:
+        """Test initial repair stats are zero."""
+        stats = RepairStats()
+        assert stats.repairs_attempted == 0
+        assert stats.repairs_successful == 0
+        assert stats.repair_details == []
+
+    def test_record_successful(self) -> None:
+        """Test recording successful repair."""
+        stats = RepairStats()
+        stats.record("sample_1", "whitespace", True, "Normalized")
+
+        assert stats.repairs_attempted == 1
+        assert stats.repairs_successful == 1
+        assert len(stats.repair_details) == 1
+        assert stats.repair_details[0]["success"] is True
+
+    def test_record_failed(self) -> None:
+        """Test recording failed repair."""
+        stats = RepairStats()
+        stats.record("sample_1", "encoding", False, "Could not fix")
+
+        assert stats.repairs_attempted == 1
+        assert stats.repairs_successful == 0
+        assert stats.repair_details[0]["success"] is False
+
+    def test_to_dict(self) -> None:
+        """Test converting stats to dictionary."""
+        stats = RepairStats()
+        stats.record("s1", "whitespace", True)
+        stats.record("s2", "encoding", False)
+
+        result = stats.to_dict()
+        assert result["repairs_attempted"] == 2
+        assert result["repairs_successful"] == 1
+        assert len(result["repair_details"]) == 2
+
+
+class TestRepairHandlers:
+    """Tests for repair handler methods."""
+
+    @pytest.fixture
+    def qc_controller(self, sample_tools: list[ToolDefinition]) -> DataQualityController:
+        """Create QC controller with auto_repair enabled."""
+        config = QCConfig(auto_repair=True, max_response_length=100)
+        return DataQualityController(sample_tools, config)
+
+    def test_repair_whitespace_trailing(self, qc_controller: DataQualityController) -> None:
+        """Test whitespace repair removes trailing whitespace."""
+        sample = {
+            "id": "test",
+            "messages": [{"role": "user", "content": "Hello  \n  world  "}],
+        }
+
+        repaired = qc_controller._repair_whitespace(sample, "test")
+
+        assert repaired is True
+        assert sample["messages"][0]["content"] == "Hello\n  world"
+        assert qc_controller.repair_stats.repairs_successful == 1
+
+    def test_repair_whitespace_line_endings(self, qc_controller: DataQualityController) -> None:
+        """Test whitespace repair normalizes line endings."""
+        sample = {
+            "id": "test",
+            "messages": [{"role": "user", "content": "Hello\r\nworld\rtest"}],
+        }
+
+        repaired = qc_controller._repair_whitespace(sample, "test")
+
+        assert repaired is True
+        assert sample["messages"][0]["content"] == "Hello\nworld\ntest"
+
+    def test_repair_whitespace_no_change(self, qc_controller: DataQualityController) -> None:
+        """Test whitespace repair returns False when no change needed."""
+        sample = {
+            "id": "test",
+            "messages": [{"role": "user", "content": "Hello world"}],
+        }
+
+        repaired = qc_controller._repair_whitespace(sample, "test")
+
+        assert repaired is False
+        assert qc_controller.repair_stats.repairs_attempted == 0
+
+    def test_repair_truncated_response(self, qc_controller: DataQualityController) -> None:
+        """Test truncation of overly long responses."""
+        long_content = "This is a test. " * 20  # >100 chars
+        sample = {
+            "id": "test",
+            "messages": [{"role": "assistant", "content": long_content}],
+        }
+
+        repaired = qc_controller._repair_truncated_response(sample, "test")
+
+        assert repaired is True
+        assert len(sample["messages"][0]["content"]) <= 100
+        assert qc_controller.repair_stats.repairs_successful == 1
+
+    def test_repair_truncated_at_sentence(self, qc_controller: DataQualityController) -> None:
+        """Test truncation prefers sentence boundaries when possible."""
+        # Use content where sentence boundary ". " is at position > 50% of max_length
+        # "This is done. " = 14 chars, so need max_length where 14 > max_length // 2
+        # Using max_length = 20, so 14 > 10 is true
+        sample = {
+            "id": "test",
+            "messages": [{"role": "assistant", "content": "This is done. Now we add more text to exceed the limit here"}],
+        }
+        qc_controller.config.max_response_length = 20
+
+        qc_controller._repair_truncated_response(sample, "test")
+
+        # Should truncate at sentence boundary
+        content = sample["messages"][0]["content"]
+        # truncate_at = 12 (". " start) + 2 = 14, then rstrip gives "This is done."
+        assert content == "This is done."
+
+    def test_repair_truncated_no_change(self, qc_controller: DataQualityController) -> None:
+        """Test no truncation when content is short enough."""
+        sample = {
+            "id": "test",
+            "messages": [{"role": "assistant", "content": "Short"}],
+        }
+
+        repaired = qc_controller._repair_truncated_response(sample, "test")
+
+        assert repaired is False
+
+    def test_repair_encoding_null_bytes(self, qc_controller: DataQualityController) -> None:
+        """Test encoding repair removes null bytes."""
+        sample = {
+            "id": "test",
+            "messages": [{"role": "user", "content": "Hello\x00world"}],
+        }
+
+        repaired = qc_controller._repair_encoding(sample, "test")
+
+        assert repaired is True
+        assert "\x00" not in sample["messages"][0]["content"]
+
+    def test_repair_encoding_replacement_char(self, qc_controller: DataQualityController) -> None:
+        """Test encoding repair removes replacement characters."""
+        sample = {
+            "id": "test",
+            "messages": [{"role": "user", "content": "Hello\ufffdworld"}],
+        }
+
+        repaired = qc_controller._repair_encoding(sample, "test")
+
+        assert repaired is True
+        assert "\ufffd" not in sample["messages"][0]["content"]
+
+    def test_repair_sample_applies_all(self, qc_controller: DataQualityController) -> None:
+        """Test repair_sample applies all repairs."""
+        sample = {
+            "id": "test",
+            "source": "seed",
+            "messages": [
+                {"role": "user", "content": "Hello\x00world  "},
+                {"role": "assistant", "content": "A" * 200},
+            ],
+        }
+
+        repaired, result = qc_controller.repair_sample(sample, "test")
+
+        assert repaired is True
+        assert "\x00" not in result["messages"][0]["content"]
+        assert len(result["messages"][1]["content"]) <= 100
+
+    def test_repair_sample_no_original_modification(self, qc_controller: DataQualityController) -> None:
+        """Test repair_sample doesn't modify original."""
+        sample = {
+            "id": "test",
+            "messages": [{"role": "user", "content": "Hello\x00world"}],
+        }
+        original_content = sample["messages"][0]["content"]
+
+        _, result = qc_controller.repair_sample(sample, "test")
+
+        assert sample["messages"][0]["content"] == original_content
+        assert result["messages"][0]["content"] != original_content
+
+    def test_dry_run_no_write(
+        self,
+        qc_controller: DataQualityController,
+        sample_data_path: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Test dry_run doesn't write output file."""
+        output_path = tmp_path / "output.jsonl"
+
+        qc_controller.validate_dataset(
+            sample_data_path,
+            output_path=output_path,
+            dry_run=True,
+        )
+
+        assert not output_path.exists()

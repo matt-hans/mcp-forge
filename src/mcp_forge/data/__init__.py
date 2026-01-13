@@ -14,6 +14,7 @@ from .qc import (
     QCConfig,
     QCFailedError,
     QCIssue,
+    RepairStats,
     ValidatedSample,
 )
 from .seed_generator import SeedGenerationResult, SeedGenerator, SeedGeneratorConfig
@@ -25,6 +26,7 @@ __all__ = [
     "QCConfig",
     "QCFailedError",
     "QCIssue",
+    "RepairStats",
     "ValidatedSample",
     # Synthesis (new)
     "DataSynthesizer",
