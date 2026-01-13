@@ -150,6 +150,101 @@ class TestQACommand:
         ])
         assert "Quality Report" in result.output
 
+    def test_qa_json_report(
+        self,
+        runner: CliRunner,
+        sample_data_path,
+        sample_tools_path,
+        tmp_path,
+    ) -> None:
+        """Test qa command with JSON report output."""
+        import json
+
+        report_path = tmp_path / "report.json"
+        result = runner.invoke(cli, [
+            "qa",
+            "--data", str(sample_data_path),
+            "--tools", str(sample_tools_path),
+            "--report", str(report_path),
+            "--format", "json",
+            "--min-samples", "1",
+        ])
+
+        assert report_path.exists()
+        with open(report_path) as f:
+            report_data = json.load(f)
+        assert "total_samples" in report_data
+        assert "schema_pass_rate" in report_data
+
+    def test_qa_markdown_report(
+        self,
+        runner: CliRunner,
+        sample_data_path,
+        sample_tools_path,
+        tmp_path,
+    ) -> None:
+        """Test qa command with Markdown report output."""
+        report_path = tmp_path / "report.md"
+        result = runner.invoke(cli, [
+            "qa",
+            "--data", str(sample_data_path),
+            "--tools", str(sample_tools_path),
+            "--report", str(report_path),
+            "--format", "markdown",
+            "--min-samples", "1",
+        ])
+
+        assert report_path.exists()
+        content = report_path.read_text()
+        assert "# QC Report" in content
+        assert "## Summary" in content
+        assert "## Tool Coverage" in content
+
+    def test_qa_csv_report(
+        self,
+        runner: CliRunner,
+        sample_data_path,
+        sample_tools_path,
+        tmp_path,
+    ) -> None:
+        """Test qa command with CSV report output."""
+        report_path = tmp_path / "report.csv"
+        result = runner.invoke(cli, [
+            "qa",
+            "--data", str(sample_data_path),
+            "--tools", str(sample_tools_path),
+            "--report", str(report_path),
+            "--format", "csv",
+            "--min-samples", "1",
+        ])
+
+        assert report_path.exists()
+        content = report_path.read_text()
+        assert "sample_id,issue_type,severity,message,repairable" in content
+
+    def test_qa_dry_run(
+        self,
+        runner: CliRunner,
+        sample_data_path,
+        sample_tools_path,
+        tmp_path,
+    ) -> None:
+        """Test qa command with --dry-run flag."""
+        output_path = tmp_path / "clean.jsonl"
+        result = runner.invoke(cli, [
+            "qa",
+            "--data", str(sample_data_path),
+            "--tools", str(sample_tools_path),
+            "--fix",
+            "--output", str(output_path),
+            "--dry-run",
+            "--min-samples", "1",
+        ])
+
+        # Dry run should not create output file
+        assert not output_path.exists()
+        assert "Dry run" in result.output or "Quality Report" in result.output
+
 
 class TestDataCommands:
     """Tests for data-related commands."""

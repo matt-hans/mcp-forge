@@ -456,6 +456,113 @@ def tools_import(from_file: str, output: str, fmt: str):
 # Data Commands
 # =============================================================================
 
+
+def _save_qc_report(
+    report: "QCReport",
+    path: Path,
+    format_type: str,
+    repair_stats: "RepairStats | None" = None,
+    config: "QCConfig | None" = None,
+) -> None:
+    """Save QC report in the specified format.
+
+    Args:
+        report: The QC report to save
+        path: Output file path
+        format_type: One of 'json', 'markdown', or 'csv'
+        repair_stats: Optional repair statistics to include
+        config: Optional config for threshold info in report
+    """
+    import csv
+    import json
+    from datetime import datetime
+
+    if format_type == "json":
+        data = report.to_dict()
+        if repair_stats:
+            data["repair_stats"] = repair_stats.to_dict()
+        if config:
+            data["thresholds"] = {
+                "schema_pass_threshold": config.schema_pass_threshold,
+                "min_samples_per_tool": config.min_samples_per_tool,
+            }
+        data["generated_at"] = datetime.utcnow().isoformat()
+
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    elif format_type == "markdown":
+        lines = [
+            "# QC Report",
+            "",
+            f"**Generated:** {datetime.utcnow().isoformat()}",
+            "",
+            "## Summary",
+            "",
+            f"- Total samples: {report.total_samples}",
+            f"- Valid samples: {report.valid_samples} ({report.valid_samples/report.total_samples:.1%})",
+            f"- Dropped: {report.dropped_samples}",
+            f"- Schema pass rate: {report.schema_pass_rate:.1%}",
+            f"- Dedup rate: {report.dedup_rate:.1%}",
+            "",
+            "## Tool Coverage",
+            "",
+            "| Tool | Samples |",
+            "|------|---------|",
+        ]
+        for tool, count in sorted(report.tool_coverage.items()):
+            lines.append(f"| {tool} | {count} |")
+
+        lines.extend([
+            "",
+            "## Scenario Coverage",
+            "",
+            "| Scenario | Samples | Percentage |",
+            "|----------|---------|------------|",
+        ])
+        for scenario, count in sorted(report.scenario_coverage.items()):
+            pct = count / report.total_samples if report.total_samples > 0 else 0
+            lines.append(f"| {scenario} | {count} | {pct:.0%} |")
+
+        if report.issues:
+            lines.extend([
+                "",
+                "## Issues",
+                "",
+                f"Found {len(report.issues)} issue(s):",
+                "",
+            ])
+            for issue in report.issues[:20]:  # Limit to 20 in markdown
+                lines.append(f"- [{issue['severity']}] {issue['issue_type']}: {issue['message']}")
+            if len(report.issues) > 20:
+                lines.append(f"- ... and {len(report.issues) - 20} more issues")
+
+        if repair_stats and repair_stats.repairs_attempted > 0:
+            lines.extend([
+                "",
+                "## Repair Statistics",
+                "",
+                f"- Attempted: {repair_stats.repairs_attempted}",
+                f"- Successful: {repair_stats.repairs_successful}",
+            ])
+
+        with open(path, "w") as f:
+            f.write("\n".join(lines))
+
+    elif format_type == "csv":
+        with open(path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["sample_id", "issue_type", "severity", "message", "repairable"])
+            for issue in report.issues:
+                writer.writerow([
+                    issue.get("sample_id", ""),
+                    issue.get("issue_type", ""),
+                    issue.get("severity", ""),
+                    issue.get("message", ""),
+                    issue.get("repairable", False),
+                ])
+
+
 @cli.command()
 @click.option("--data", "-d", required=True, type=click.Path(exists=True), help="Training data JSONL file")
 @click.option("--tools", "-t", required=True, type=click.Path(exists=True), help="Tools JSON file")
@@ -466,6 +573,9 @@ def tools_import(from_file: str, output: str, fmt: str):
 @click.option("--no-dedup", is_flag=True, help="Disable duplicate detection")
 @click.option("--no-auto-repair", is_flag=True, help="Disable auto-repair of minor issues")
 @click.option("--strict", is_flag=True, help="Fail on warnings, not just errors")
+@click.option("--report", "-r", help="Output path for QC report")
+@click.option("--format", "report_format", type=click.Choice(["json", "markdown", "csv"]), default="json", help="Report format")
+@click.option("--dry-run", is_flag=True, help="Preview repairs without writing files")
 @click.pass_context
 def qa(
     ctx,
@@ -478,6 +588,9 @@ def qa(
     no_dedup: bool,
     no_auto_repair: bool,
     strict: bool,
+    report: str | None,
+    report_format: str,
+    dry_run: bool,
 ):
     """Run dataset quality analysis and optional cleanup.
 
@@ -489,6 +602,12 @@ def qa(
       1. CLI flags (--threshold, --min-samples)
       2. Config file (.mcp-forge/config.yaml)
       3. Default values
+
+    \b
+    Report Formats:
+      json     - Full machine-readable report (default)
+      markdown - Human-readable summary
+      csv      - Issues as CSV for spreadsheet import
     """
     import json
 
@@ -528,29 +647,39 @@ def qa(
     output_path = Path(output) if output else (Path(data).with_suffix(".clean.jsonl") if fix else None)
 
     # Run validation
-    report, validated = qc.validate_dataset(Path(data), output_path)
+    qc_report, validated = qc.validate_dataset(Path(data), output_path, dry_run=dry_run)
 
     # Print report
-    qc.print_report(report)
+    qc.print_report(qc_report)
 
-    if output_path:
+    if output_path and not dry_run:
         console.print(f"\n[green]Cleaned data saved to {output_path}[/green]")
+    elif output_path and dry_run:
+        console.print(f"\n[yellow]Dry run: would save cleaned data to {output_path}[/yellow]")
 
-    # Save report
+    # Save report in requested format
     state_manager: StateManager = ctx.obj["state_manager"]
-    report_path = state_manager.save_qc_report(report)
-    console.print(f"[green]Report saved to {report_path}[/green]")
+
+    if report:
+        # User specified custom report path
+        report_path = Path(report)
+        _save_qc_report(qc_report, report_path, report_format, qc.repair_stats, config)
+        console.print(f"[green]Report saved to {report_path}[/green]")
+    else:
+        # Use default state manager path
+        default_report_path = state_manager.save_qc_report(qc_report)
+        console.print(f"[green]Report saved to {default_report_path}[/green]")
 
     # In strict mode, fail on any warnings
-    has_warnings = any(issue.get("severity") == "warning" for issue in report.issues)
-    passes = report.passes_threshold(config.schema_pass_threshold, config.min_samples_per_tool)
+    has_warnings = any(issue.get("severity") == "warning" for issue in qc_report.issues)
+    passes = qc_report.passes_threshold(config.schema_pass_threshold, config.min_samples_per_tool)
 
     if not passes or (strict and has_warnings):
         console.print("\n[red]QC validation failed![/red]")
         if not passes:
-            console.print(f"  Schema pass rate: {report.schema_pass_rate:.1%} (threshold: {config.schema_pass_threshold:.1%})")
+            console.print(f"  Schema pass rate: {qc_report.schema_pass_rate:.1%} (threshold: {config.schema_pass_threshold:.1%})")
         if strict and has_warnings:
-            console.print(f"  Strict mode: {sum(1 for i in report.issues if i.get('severity') == 'warning')} warnings found")
+            console.print(f"  Strict mode: {sum(1 for i in qc_report.issues if i.get('severity') == 'warning')} warnings found")
         console.print("\n[yellow]Suggestions:[/yellow]")
         console.print("  - Run with --fix to auto-repair fixable issues")
         console.print("  - Lower threshold with --threshold 0.95")
