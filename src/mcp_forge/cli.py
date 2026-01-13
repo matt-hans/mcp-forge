@@ -440,8 +440,50 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state.update_stage(PipelineStage.PACKAGING)
         state_manager.save_state(state)
 
-        # TODO: Implement packaging
-        console.print("   [yellow]Packaging not yet implemented[/yellow]")
+        from mcp_forge.export.bundle import BundleConfig, BundleEngine
+
+        # Determine bundle output path
+        output_dir = Path(state.output_path)
+
+        console.print(f"   Output: {output_dir}")
+
+        # Build config from pipeline state
+        config = BundleConfig(
+            gguf_path=Path(state.gguf_path),
+            tools=state.tools,
+            output_dir=output_dir,
+            model_name=f"mcp-forge-{state.model_family}",
+            model_family=state.model_family,
+            training_samples=state.synthesis_plan.total_samples if state.synthesis_plan else 0,
+        )
+
+        # Add quality metrics if available
+        if state.validation_result:
+            config.tool_accuracy = state.validation_result.tool_selection_accuracy
+            config.schema_conformance = state.validation_result.schema_conformance_rate
+        if state.benchmark_result:
+            config.benchmark_score = state.benchmark_result.overall_score
+
+        engine = BundleEngine(config)
+
+        def on_bundle_progress(msg: str) -> None:
+            console.print(f"   {msg}")
+
+        result = engine.package(progress_callback=on_bundle_progress)
+
+        if result.success:
+            state.bundle_path = str(result.bundle_path)
+            state_manager.save_state(state)
+
+            console.print(f"   Size: {result.bundle_size_mb:.1f} MB")
+            console.print(f"   Files: {', '.join(result.files_created)}")
+            console.print("   [green]Bundle complete[/green]")
+        else:
+            console.print(f"   [red]Packaging failed: {result.error}[/red]")
+            state.error = result.error
+            state.update_stage(PipelineStage.FAILED)
+            state_manager.save_state(state)
+            raise SystemExit(1)
 
     # Complete
     state.update_stage(PipelineStage.COMPLETE)
@@ -1385,20 +1427,263 @@ def export_model(
 
 @cli.command()
 @click.option("--model", "-m", required=True, type=click.Path(exists=True), help="Path to GGUF model")
-@click.option("--tools", "-t", required=True, type=click.Path(exists=True), help="Tools JSON file")
+@click.option("--tools", "-t", type=click.Path(exists=True), help="Tools JSON file")
 @click.option("--validation", type=click.Path(exists=True), help="Validation report JSON")
 @click.option("--benchmark", "bench", type=click.Path(exists=True), help="Benchmark report JSON")
 @click.option("--output", "-o", required=True, help="Output directory for bundle")
-def pack(model: str, tools: str, validation: str | None, bench: str | None, output: str):
-    """Create distributable agent bundle."""
-    console.print("[yellow]Bundle packaging coming soon[/yellow]")
+@click.option("--name", help="Model name for bundle (default: derived from model filename)")
+@click.option("--description", help="Short description for README")
+@click.option("--no-modelfile", is_flag=True, help="Skip Ollama Modelfile generation")
+@click.option("--no-readme", is_flag=True, help="Skip README generation")
+@click.pass_context
+def pack(
+    ctx,
+    model: str,
+    tools: str | None,
+    validation: str | None,
+    bench: str | None,
+    output: str,
+    name: str | None,
+    description: str | None,
+    no_modelfile: bool,
+    no_readme: bool,
+):
+    """Create distributable agent bundle.
+
+    Packages a GGUF model with tool definitions, deployment configuration,
+    and documentation into a distributable bundle.
+
+    \b
+    Bundle Contents:
+      model.gguf   - The quantized model file
+      tools.json   - Tool schema definitions (OpenAI function format)
+      config.yaml  - Deployment configuration
+      README.md    - Usage instructions (optional)
+      Modelfile    - Ollama import file (optional)
+
+    \b
+    Examples:
+      # Basic bundle from GGUF and tools
+      mcp-forge pack -m model.gguf -t tools.json -o ./dist/agent
+
+      # With validation/benchmark reports
+      mcp-forge pack -m model.gguf -t tools.json --validation val.json -o ./dist/agent
+
+      # From pipeline state (uses saved tools and metrics)
+      mcp-forge pack -m model.gguf -o ./dist/agent
+    """
+    import json
+
+    from mcp_forge.export.bundle import BundleConfig, BundleEngine
+    from mcp_forge.state import ToolDefinition
+
+    console.print("\n[bold]MCP-Forge Bundle Packaging[/bold]")
+    console.print("=" * 50)
+
+    state_manager: StateManager = ctx.obj["state_manager"]
+
+    # Load tools from file or pipeline state
+    tool_defs: list[ToolDefinition] = []
+    if tools:
+        console.print(f"Loading tools from {tools}...")
+        with open(tools) as f:
+            tool_defs = [ToolDefinition.from_dict(t) for t in json.load(f)]
+    else:
+        # Try to load from pipeline state
+        state = state_manager.load_state()
+        if state and state.tools:
+            console.print("Using tools from pipeline state...")
+            tool_defs = state.tools
+        else:
+            console.print("[red]Error: No tools specified. Use --tools or run pipeline first.[/red]")
+            raise SystemExit(1)
+
+    console.print(f"Model: {model}")
+    console.print(f"Tools: {len(tool_defs)}")
+    console.print(f"Output: {output}")
+
+    # Load metrics from reports or pipeline state
+    tool_accuracy = None
+    schema_conformance = None
+    benchmark_score = None
+    model_family = "unknown"
+    training_samples = 0
+
+    # Check validation report
+    if validation:
+        try:
+            with open(validation) as f:
+                val_data = json.load(f)
+            tool_accuracy = val_data.get("tool_selection_accuracy")
+            schema_conformance = val_data.get("schema_conformance_rate")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load validation report: {e}[/yellow]")
+
+    # Check benchmark report
+    if bench:
+        try:
+            with open(bench) as f:
+                bench_data = json.load(f)
+            benchmark_score = bench_data.get("overall_score")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load benchmark report: {e}[/yellow]")
+
+    # Enrich from pipeline state if available
+    state = state_manager.load_state()
+    if state:
+        if state.validation_result and tool_accuracy is None:
+            tool_accuracy = state.validation_result.tool_selection_accuracy
+            schema_conformance = state.validation_result.schema_conformance_rate
+        if state.benchmark_result and benchmark_score is None:
+            benchmark_score = state.benchmark_result.overall_score
+        model_family = state.model_family
+        if state.synthesis_plan:
+            training_samples = state.synthesis_plan.total_samples
+
+    # Create config
+    config = BundleConfig(
+        gguf_path=Path(model),
+        tools=tool_defs,
+        output_dir=Path(output),
+        include_modelfile=not no_modelfile,
+        include_readme=not no_readme,
+        model_name=name or "",
+        model_description=description or "",
+        tool_accuracy=tool_accuracy,
+        schema_conformance=schema_conformance,
+        benchmark_score=benchmark_score,
+        model_family=model_family,
+        training_samples=training_samples,
+    )
+
+    # Create bundle
+    engine = BundleEngine(config)
+
+    def on_progress(msg: str) -> None:
+        console.print(f"  {msg}")
+
+    console.print("\nPackaging bundle...")
+    result = engine.package(progress_callback=on_progress)
+
+    # Display results
+    console.print("\n" + "=" * 50)
+
+    if result.success:
+        console.print("[bold green]Bundle created successfully![/bold green]")
+        console.print(f"\nLocation: {result.bundle_path}")
+        console.print(f"Size: {result.bundle_size_mb:.1f} MB")
+        console.print("\nFiles:")
+        for f in result.files_created:
+            console.print(f"  - {f}")
+
+        if result.validation_passed:
+            console.print("\n[green]Validation: PASSED[/green]")
+        else:
+            console.print("\n[yellow]Validation warnings:[/yellow]")
+            for err in result.validation_errors:
+                console.print(f"  - {err}")
+
+        # Print next steps
+        console.print("\n[bold]Next Steps:[/bold]")
+        console.print(f"  1. cd {output}")
+        console.print(f"  2. ollama create {config.model_name} -f Modelfile")
+        console.print(f"  3. ollama run {config.model_name}")
+
+        # Save report
+        state_manager.ensure_dirs()
+        report_path = state_manager.get_report_path("bundle_latest.json")
+        with open(report_path, "w") as f:
+            json.dump(result.to_dict(), f, indent=2)
+        console.print(f"\nReport: {report_path}")
+
+    else:
+        console.print(f"[red]Bundle creation failed: {result.error}[/red]")
+        if result.validation_errors:
+            console.print("\nErrors:")
+            for err in result.validation_errors:
+                console.print(f"  - {err}")
+        raise SystemExit(1)
 
 
 @cli.command("verify-bundle")
 @click.argument("bundle_path", type=click.Path(exists=True))
-def verify_bundle(bundle_path: str):
-    """Verify an agent bundle and run smoke tests."""
-    console.print("[yellow]Bundle verification coming soon[/yellow]")
+@click.option("--smoke-test", is_flag=True, help="Run inference smoke test (requires llama-cpp-python)")
+def verify_bundle_cmd(bundle_path: str, smoke_test: bool):
+    """Verify an agent bundle and optionally run smoke tests.
+
+    Checks bundle integrity including:
+    - Required files present (model.gguf, tools.json, config.yaml)
+    - GGUF file has valid magic bytes
+    - JSON/YAML files are valid
+    - Tool counts match across files
+
+    With --smoke-test, also loads the model and runs a quick inference
+    to verify it works (requires llama-cpp-python).
+
+    \b
+    Example:
+      mcp-forge verify-bundle ./dist/agent
+      mcp-forge verify-bundle ./dist/agent --smoke-test
+    """
+    from mcp_forge.export.bundle import verify_bundle
+
+    console.print("\n[bold]MCP-Forge Bundle Verification[/bold]")
+    console.print("=" * 50)
+    console.print(f"Bundle: {bundle_path}")
+
+    if smoke_test:
+        console.print("Mode: Full verification with smoke test")
+    else:
+        console.print("Mode: File integrity check")
+
+    console.print("\nVerifying...")
+
+    valid, errors = verify_bundle(Path(bundle_path), smoke_test=smoke_test)
+
+    # List bundle contents
+    bundle_dir = Path(bundle_path)
+    files = list(bundle_dir.iterdir())
+    console.print(f"\nBundle contents ({len(files)} files):")
+    total_size = 0
+    for f in sorted(files):
+        if f.is_file():
+            size = f.stat().st_size
+            total_size += size
+            if size > 1024 * 1024:
+                size_str = f"{size / (1024 * 1024):.1f} MB"
+            elif size > 1024:
+                size_str = f"{size / 1024:.1f} KB"
+            else:
+                size_str = f"{size} bytes"
+            console.print(f"  {f.name}: {size_str}")
+
+    console.print(f"\nTotal size: {total_size / (1024 * 1024):.1f} MB")
+
+    # Display results
+    console.print("\n" + "=" * 50)
+
+    if valid:
+        console.print("[bold green]Bundle verification PASSED[/bold green]")
+
+        # Show bundle info from config
+        config_path = bundle_dir / "config.yaml"
+        if config_path.exists():
+            import yaml
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+            console.print("\nBundle info:")
+            if config and "model" in config:
+                console.print(f"  Model: {config['model'].get('name', 'unknown')}")
+                console.print(f"  Family: {config['model'].get('family', 'unknown')}")
+            if config and "tools" in config:
+                console.print(f"  Tools: {config['tools'].get('count', 0)}")
+
+    else:
+        console.print("[bold red]Bundle verification FAILED[/bold red]")
+        console.print("\nErrors:")
+        for err in errors:
+            console.print(f"  [red]✗[/red] {err}")
+        raise SystemExit(1)
 
 
 # =============================================================================
