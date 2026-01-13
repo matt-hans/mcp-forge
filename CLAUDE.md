@@ -48,14 +48,24 @@ mcp-forge status
 
 ## Architecture
 
-### Current File Structure (Flat, Pre-Modularization)
+### Package Structure
 
-The codebase is currently flat in the root directory, with planned migration to `src/mcp_forge/`:
-
-- `cli.py` - Click-based CLI entry point with all commands defined
-- `state.py` - Pipeline state management with checkpoint/resume support, dataclasses for `PipelineState`, `ToolDefinition`, `QCReport`, `ValidationResult`, `BenchmarkResult`
-- `inspector.py` - MCP server connection and tool schema extraction using `mcp` SDK
-- `qc.py` - Data quality controller with schema validation, deduplication, coverage analysis
+```
+src/mcp_forge/
+├── __init__.py          # Package version and exports
+├── cli.py               # Click-based CLI entry point
+├── state.py             # Pipeline state management with checkpoint/resume
+├── data/
+│   ├── __init__.py      # Data module exports
+│   ├── qc.py            # Data quality controller with schema validation
+│   ├── formatter.py     # Hermes ChatML formatter for training data
+│   ├── seed_generator.py # GPT-5 seed generation
+│   ├── augmenter.py     # LLM paraphrase augmentation
+│   └── synthesizer.py   # Main synthesis orchestrator
+└── tools/
+    ├── __init__.py      # Tools module exports
+    └── inspector.py     # MCP server connection and tool schema extraction
+```
 
 ### Pipeline Stages
 
@@ -73,15 +83,20 @@ The pipeline executes these stages in order (defined in `PipelineStage` enum):
 ### Key Abstractions
 
 - **ToolDefinition** (`state.py:50`) - Represents an MCP tool with name, description, input_schema
-- **PipelineState** (`state.py:198`) - Full checkpoint state with tools, QC reports, validation results
-- **StateManager** (`state.py:339`) - Handles persistence to `.mcp-forge/` directory
-- **DataQualityController** (`qc.py:89`) - Validates training samples against tool schemas
+- **PipelineState** (`state.py:196`) - Full checkpoint state with tools, QC reports, validation results
+- **StateManager** (`state.py:337`) - Handles persistence to `.mcp-forge/` directory
+- **DataQualityController** (`data/qc.py:89`) - Validates training samples against tool schemas
+- **DataSynthesizer** (`data/synthesizer.py:29`) - Orchestrates seed generation and augmentation
+- **SeedGenerator** (`data/seed_generator.py:43`) - GPT-5 based seed sample generation
+- **DataAugmenter** (`data/augmenter.py:44`) - LLM paraphrasing for data expansion
 
 ### Training Data Format
 
-JSONL with conversation samples containing:
+JSONL with Hermes ChatML format:
 - `id`, `source` (seed/augmented), `scenario` (standard/no_tool/error/ambiguous/edge)
 - `tool_name`, `messages` array with system/user/assistant/tool roles
+- Tool calls wrapped in `<tool_call>` XML tags with JSON payload
+- System prompt includes `<tools>` XML block with function definitions
 - Scenarios ensure the model doesn't "over-call" tools (15% no-tool samples)
 
 ### State Directory Structure
@@ -96,14 +111,14 @@ JSONL with conversation samples containing:
 
 ## Implementation Status
 
-**Implemented (v1.1):**
+**Implemented (v1.2):**
 - CLI framework with all command stubs
 - State management with checkpoint/resume
 - MCP inspector module
 - Data QC engine with schema validation
+- **Data synthesis engine** (seed generation + LLM paraphrasing augmentation)
 
 **Not Yet Implemented:**
-- Data synthesis (generate command)
 - Training engine
 - Looped validation
 - Benchmark suite
