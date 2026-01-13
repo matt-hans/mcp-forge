@@ -304,8 +304,37 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state.update_stage(PipelineStage.VALIDATING)
         state_manager.save_state(state)
 
-        # TODO: Implement looped validation
-        console.print("   [yellow]Looped validation not yet implemented[/yellow]")
+        from mcp_forge.validation import ValidationConfig, ValidationRunner
+        from mcp_forge.validation.config import StubConfig
+        from mcp_forge.validation.runner import generate_validation_samples
+
+        # Default to weather stub for pipeline validation
+        stub_config = StubConfig(stub_type="weather", deterministic=True)
+        val_config = ValidationConfig(
+            model_path=Path(state.lora_adapter_path),
+            samples=20,
+            stub_config=stub_config,
+        )
+
+        runner = ValidationRunner(val_config, state.tools)
+        samples = generate_validation_samples(state.tools, count=20)
+
+        def on_progress(current: int, total: int, pct: float) -> None:
+            console.print(f"   {current}/{total} ({pct:.0%})")
+
+        result = runner.run(samples, progress_callback=on_progress)
+
+        state.validation_result = result
+        state_manager.save_state(state)
+
+        console.print(f"   Parse rate: {result.tool_call_parse_rate:.1%}")
+        console.print(f"   Schema conformance: {result.schema_conformance_rate:.1%}")
+        console.print(f"   Tool accuracy: {result.tool_selection_accuracy:.1%}")
+
+        if result.passed:
+            console.print("   [green]Validation passed[/green]")
+        else:
+            console.print("   [yellow]Validation below thresholds (continuing)[/yellow]")
 
     # Stage 6: Benchmark (optional)
     if not skip_benchmark and state.stage in (PipelineStage.VALIDATING, PipelineStage.BENCHMARKING):
@@ -874,13 +903,116 @@ def train(data: str, model: str, profile: str, output: str):
 @click.option("--server", "-s", help="MCP server command for live validation")
 @click.option("--stub", type=click.Choice(["weather", "filesystem"]), help="Use deterministic stub")
 @click.option("--samples", default=20, help="Number of validation samples")
-def validate(model: str, server: str | None, stub: str | None, samples: int):
+@click.option("--tools", "-t", type=click.Path(exists=True), help="Tools JSON file (required for stub)")
+@click.option("--threshold", type=float, help="Override default pass threshold (0.90)")
+@click.pass_context
+def validate(
+    ctx,
+    model: str,
+    server: str | None,
+    stub: str | None,
+    samples: int,
+    tools: str | None,
+    threshold: float | None,
+):
     """Run looped validation against real or stubbed MCP server."""
+    import json
+
+    from mcp_forge.state import ToolDefinition
+    from mcp_forge.validation import ValidationConfig, ValidationRunner
+    from mcp_forge.validation.config import StubConfig
+    from mcp_forge.validation.runner import generate_validation_samples
+
     if not server and not stub:
         console.print("[red]Error: Either --server or --stub is required[/red]")
         raise SystemExit(1)
 
-    console.print("[yellow]Looped validation coming soon[/yellow]")
+    console.print("\n[bold]MCP-Forge Looped Validation[/bold]")
+    console.print("=" * 50)
+
+    # Load tools
+    if stub:
+        # Get tools from stub
+        from mcp_forge.validation.stubs import StubRegistry
+
+        stub_instance = StubRegistry.get(stub)
+        tool_defs = [
+            ToolDefinition(
+                name=t["name"],
+                description=t["description"],
+                input_schema=t["inputSchema"],
+            )
+            for t in stub_instance.get_tools()
+        ]
+    elif tools:
+        with open(tools) as f:
+            tool_defs = [ToolDefinition.from_dict(t) for t in json.load(f)]
+    else:
+        # Extract from MCP server
+        from mcp_forge.tools.inspector import inspect_mcp_server
+
+        tool_defs = asyncio.run(inspect_mcp_server(server))
+
+    console.print(f"Model: {model}")
+    console.print(f"Mode: {'Stub (' + stub + ')' if stub else 'Live MCP'}")
+    console.print(f"Tools: {len(tool_defs)}")
+    console.print(f"Samples: {samples}")
+
+    # Configure validation
+    stub_config = StubConfig(stub_type=stub, deterministic=True) if stub else None
+    config = ValidationConfig(
+        model_path=Path(model),
+        samples=samples,
+        stub_config=stub_config,
+        mcp_command=server,
+        accuracy_threshold=threshold or 0.90,
+    )
+
+    runner = ValidationRunner(config, tool_defs)
+
+    # Generate validation samples
+    console.print("\nGenerating validation samples...")
+    validation_samples = generate_validation_samples(tool_defs, count=samples)
+    console.print(f"Generated {len(validation_samples)} samples")
+
+    # Run validation
+    console.print("\nRunning validation...")
+
+    def on_progress(current: int, total: int, pct: float) -> None:
+        console.print(f"  Sample {current}/{total} ({pct:.0%})")
+
+    try:
+        result = runner.run(validation_samples, progress_callback=on_progress)
+    except Exception as e:
+        console.print(f"\n[red]Validation failed: {e}[/red]")
+        raise SystemExit(1) from e
+
+    # Print results
+    console.print("\n" + "=" * 50)
+    console.print("[bold]Validation Results[/bold]")
+    console.print(f"Passed: {'[green]YES[/green]' if result.passed else '[red]NO[/red]'}")
+    console.print(f"Samples: {result.samples_passed}/{result.samples_tested}")
+    console.print(f"Parse rate: {result.tool_call_parse_rate:.1%}")
+    console.print(f"Schema conformance: {result.schema_conformance_rate:.1%}")
+    console.print(f"Tool selection accuracy: {result.tool_selection_accuracy:.1%}")
+    console.print(f"Loop completion: {result.loop_completion_rate:.1%}")
+
+    if result.failures:
+        console.print(f"\n[yellow]Failures ({len(result.failures)}):[/yellow]")
+        for f in result.failures[:5]:
+            console.print(f"  - {f['error'][:60]}...")
+
+    # Save report
+    state_manager: StateManager = ctx.obj["state_manager"]
+    state_manager.ensure_dirs()
+
+    report_path = state_manager.get_report_path("validation_latest.json")
+    with open(report_path, "w") as f:
+        json.dump(result.to_dict(), f, indent=2)
+    console.print(f"\nReport saved: {report_path}")
+
+    if not result.passed:
+        raise SystemExit(1)
 
 
 @cli.command()
