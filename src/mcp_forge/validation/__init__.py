@@ -4,6 +4,11 @@ Provides validation against real and stubbed MCP servers with
 deterministic testing and metric aggregation.
 """
 
+from mcp_forge.validation.benchmark import (
+    BenchmarkConfig,
+    BenchmarkRunner,
+    LatencyStats,
+)
 from mcp_forge.validation.config import (
     InferenceConfig,
     StubConfig,
@@ -22,6 +27,10 @@ from mcp_forge.validation.stubs import (
 )
 
 __all__ = [
+    # Benchmark
+    "BenchmarkConfig",
+    "BenchmarkRunner",
+    "LatencyStats",
     # Config
     "InferenceConfig",
     "StubConfig",
