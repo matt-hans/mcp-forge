@@ -33,6 +33,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "aiofiles>=23.0.0",
     "jsonschema>=4.0.0",
+    "pyyaml>=6.0",
     # Unsloth and ML deps - these require CUDA
     "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git",
     "torch>=2.1.0",
@@ -40,6 +41,7 @@ dependencies = [
     "datasets>=2.18.0",
     "trl>=0.8.0",
     "bitsandbytes>=0.43.0",
+    "llama-cpp-python>=0.2.50",
 ]
 
 [project.optional-dependencies]
