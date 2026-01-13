@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -11,16 +10,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mcp_forge.state import (
-    PipelineStage,
     PipelineState,
     QCReport,
-    Scenario,
     StateManager,
     SynthesisPlan,
     ToolDefinition,
     ValidationResult,
 )
-
 
 # =============================================================================
 # Path Fixtures

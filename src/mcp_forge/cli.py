@@ -458,11 +458,11 @@ def tools_import(from_file: str, output: str, fmt: str):
 
 
 def _save_qc_report(
-    report: "QCReport",
+    report: QCReport,  # noqa: F821
     path: Path,
     format_type: str,
-    repair_stats: "RepairStats | None" = None,
-    config: "QCConfig | None" = None,
+    repair_stats: RepairStats | None = None,  # noqa: F821
+    config: QCConfig | None = None,  # noqa: F821
 ) -> None:
     """Save QC report in the specified format.
 
@@ -752,7 +752,7 @@ def generate(server: str | None, tools: str | None, samples: int, seed_samples: 
     else:
         console.print(f"\n[green]Output saved to {result.training_path}[/green]")
 
-    console.print(f"\nResults:")
+    console.print("\nResults:")
     console.print(f"  Seeds: {result.seed_count}")
     console.print(f"  Augmented: {result.augmented_count}")
     console.print(f"  Total: {result.total_count}")

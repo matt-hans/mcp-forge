@@ -491,7 +491,7 @@ class TestDataQualityControllerIntegration:
 class TestQCFailedError:
     """Tests for QCFailedError exception."""
 
-    def test_error_with_schema_failure(self, qc_report: "QCReport") -> None:
+    def test_error_with_schema_failure(self) -> None:
         """Test error captures schema rate failure."""
         from mcp_forge.state import QCReport
 

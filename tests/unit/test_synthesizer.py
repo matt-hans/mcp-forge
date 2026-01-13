@@ -16,6 +16,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mcp_forge.data.augmenter import (
+    AugmenterConfig,
+    DataAugmenter,
+)
 from mcp_forge.data.formatter import (
     create_training_sample,
     format_system_prompt,
@@ -29,14 +33,8 @@ from mcp_forge.data.seed_generator import (
     SeedGenerator,
     SeedGeneratorConfig,
 )
-from mcp_forge.data.augmenter import (
-    AugmentationError,
-    AugmenterConfig,
-    DataAugmenter,
-)
-from mcp_forge.data.synthesizer import DataSynthesizer, SynthesisError
+from mcp_forge.data.synthesizer import DataSynthesizer
 from mcp_forge.state import SynthesisPlan, ToolDefinition
-
 
 # =============================================================================
 # Formatter Tests

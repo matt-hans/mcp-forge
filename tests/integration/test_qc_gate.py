@@ -20,7 +20,6 @@ from mcp_forge.data.qc import (
     DataQualityController,
     QCConfig,
     QCFailedError,
-    RepairStats,
 )
 from mcp_forge.state import QCReport, ToolDefinition
 

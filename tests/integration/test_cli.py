@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from click.testing import CliRunner
 import pytest
+from click.testing import CliRunner
 
 from mcp_forge.cli import cli
 
@@ -161,7 +161,7 @@ class TestQACommand:
         import json
 
         report_path = tmp_path / "report.json"
-        result = runner.invoke(cli, [
+        runner.invoke(cli, [
             "qa",
             "--data", str(sample_data_path),
             "--tools", str(sample_tools_path),
@@ -185,7 +185,7 @@ class TestQACommand:
     ) -> None:
         """Test qa command with Markdown report output."""
         report_path = tmp_path / "report.md"
-        result = runner.invoke(cli, [
+        runner.invoke(cli, [
             "qa",
             "--data", str(sample_data_path),
             "--tools", str(sample_tools_path),
@@ -209,7 +209,7 @@ class TestQACommand:
     ) -> None:
         """Test qa command with CSV report output."""
         report_path = tmp_path / "report.csv"
-        result = runner.invoke(cli, [
+        runner.invoke(cli, [
             "qa",
             "--data", str(sample_data_path),
             "--tools", str(sample_tools_path),

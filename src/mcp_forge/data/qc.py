@@ -125,7 +125,7 @@ class QCFailedError(Exception):
 
     def __init__(
         self,
-        report: "QCReport",
+        report: QCReport,
         threshold: float,
         min_samples: int,
         message: str | None = None,

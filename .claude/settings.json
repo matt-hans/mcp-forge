@@ -1,17 +1,4 @@
 {
-  "hooks": {
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/traffic_controller.py",
-            "timeout": 60
-          }
-        ]
-      }
-    ]
-  },
   "enabledPlugins": {
     "rust-analyzer-lsp@claude-plugins-official": true,
     "claude-mem@thedotmack": false,

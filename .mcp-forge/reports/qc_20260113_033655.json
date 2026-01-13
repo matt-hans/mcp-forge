@@ -1,0 +1,39 @@
+{
+  "total_samples": 5,
+  "valid_samples": 5,
+  "dropped_samples": 0,
+  "schema_pass_rate": 1.0,
+  "dedup_rate": 0.0,
+  "tool_coverage": {
+    "get_weather": 5
+  },
+  "scenario_coverage": {
+    "standard": 5
+  },
+  "issues": [
+    {
+      "sample_id": "coverage",
+      "issue_type": "low_coverage",
+      "message": "Tool 'get_weather' has only 5 samples (min: 10)",
+      "severity": "warning",
+      "repairable": false,
+      "repair_action": null
+    },
+    {
+      "sample_id": "coverage",
+      "issue_type": "low_coverage",
+      "message": "Tool 'calculate' has only 0 samples (min: 10)",
+      "severity": "warning",
+      "repairable": false,
+      "repair_action": null
+    },
+    {
+      "sample_id": "coverage",
+      "issue_type": "low_coverage",
+      "message": "Tool 'search_files' has only 0 samples (min: 10)",
+      "severity": "warning",
+      "repairable": false,
+      "repair_action": null
+    }
+  ]
+}
