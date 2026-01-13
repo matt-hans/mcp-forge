@@ -1329,7 +1329,7 @@ def export_model(
     output_path = Path(output)
 
     # Ensure output has .gguf extension
-    if not output_path.suffix == ".gguf":
+    if output_path.suffix != ".gguf":
         output_path = output_path.with_suffix(".gguf")
 
     console.print(f"Adapter: {adapter_path}")
