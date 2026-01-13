@@ -300,17 +300,22 @@ class DataQualityController:
 
             content = msg.get("content", "")
 
-            # Try to find JSON block
+            # Try to find JSON block - support multiple formats
             patterns = [
+                # Hermes format with <tool_call> tags
+                r"<tool_call>\s*(.*?)\s*</tool_call>",
+                # Standard markdown code blocks
                 r"```json\s*(.*?)\s*```",
                 r"```\s*(.*?)\s*```",
+                # Bare JSON object with "name" field
                 r"\{[^{}]*\"name\"[^{}]*\}",
             ]
 
             for pattern in patterns:
                 match = re.search(pattern, content, re.DOTALL)
                 if match:
-                    json_str = match.group(1) if "```" in pattern else match.group(0)
+                    # For patterns with groups, use group 1; for bare JSON, use group 0
+                    json_str = match.group(1) if match.lastindex else match.group(0)
                     try:
                         data = json.loads(json_str)
                         if "name" in data:
