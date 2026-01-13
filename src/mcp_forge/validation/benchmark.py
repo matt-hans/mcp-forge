@@ -311,3 +311,142 @@ class BenchmarkRunner:
                     samples.extend(tool_samples)
 
         return samples[:count]
+
+    def run(
+        self,
+        progress_callback: Callable[[str, int, int, float], None] | None = None,
+    ) -> BenchmarkResult:
+        """Run full benchmark and return aggregated results.
+
+        Args:
+            progress_callback: Optional callback(category, current, total, progress_pct)
+
+        Returns:
+            BenchmarkResult with per-tool and per-scenario metrics
+        """
+        import random
+
+        runner = self._get_validation_runner()
+
+        # Load model once
+        if runner.model is None:
+            runner.load_model()
+
+        # Warmup (discard latencies)
+        if self.config.warmup_samples > 0 and self.config.measure_latency:
+            warmup_samples = self._generate_tool_samples(
+                self.tools[0], self.config.warmup_samples, random.Random(0)
+            )
+            for sample in warmup_samples:
+                runner.validate_single(sample)
+
+        # Generate all benchmark samples
+        all_samples = self._generate_benchmark_samples()
+
+        # Track results
+        per_tool_results: dict[str, dict[str, float]] = {}
+        per_scenario_results: dict[str, dict[str, float]] = {}
+        per_tool_latencies: dict[str, list[float]] = {}
+
+        total_samples = sum(len(samples) for samples in all_samples.values())
+        completed = 0
+
+        for category, samples in all_samples.items():
+            category_results: list[dict[str, Any]] = []
+            category_latencies: list[float] = []
+
+            for sample in samples:
+                # Measure latency
+                start_time = time.perf_counter()
+                result = runner.validate_single(sample)
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+                category_results.append(result)
+                if self.config.measure_latency:
+                    category_latencies.append(elapsed_ms)
+
+                completed += 1
+                if progress_callback:
+                    progress_callback(category, completed, total_samples, completed / total_samples)
+
+            # Aggregate category metrics
+            total = len(category_results)
+            if total == 0:
+                continue
+
+            parsed = sum(1 for r in category_results if r["parsed"])
+            schema_valid = sum(1 for r in category_results if r["schema_valid"])
+            tool_correct = sum(1 for r in category_results if r["tool_correct"])
+            loop_complete = sum(1 for r in category_results if r["loop_complete"])
+
+            latency_stats = LatencyStats.from_samples(category_latencies)
+
+            metrics = {
+                "samples": total,
+                "accuracy": tool_correct / total,
+                "schema": schema_valid / total,
+                "parse_rate": parsed / total,
+                "loop_rate": loop_complete / total,
+                "latency_mean_ms": latency_stats.mean_ms,
+                "latency_p95_ms": latency_stats.p95_ms,
+            }
+
+            if category.startswith("tool:"):
+                tool_name = category.split(":", 1)[1]
+                per_tool_results[tool_name] = metrics
+                per_tool_latencies[tool_name] = category_latencies
+            elif category.startswith("scenario:"):
+                scenario_name = category.split(":", 1)[1]
+                per_scenario_results[scenario_name] = {"pass_rate": tool_correct / total}
+
+        # Calculate overall score (weighted average of key metrics)
+        all_tool_accuracies = [m["accuracy"] for m in per_tool_results.values()]
+        overall_accuracy = sum(all_tool_accuracies) / len(all_tool_accuracies) if all_tool_accuracies else 0.0
+
+        no_tool_rate = per_scenario_results.get("no_tool", {}).get("pass_rate", 0.0)
+
+        # Overall score: 70% accuracy, 30% no-tool correctness
+        overall_score = (overall_accuracy * 0.7) + (no_tool_rate * 0.3)
+
+        # Store latencies for potential baseline comparison
+        self._latencies = [lat for lats in per_tool_latencies.values() for lat in lats]
+
+        return BenchmarkResult(
+            model_name=self.config.model_name,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            overall_score=overall_score,
+            per_tool_results=per_tool_results,
+            per_scenario_results=per_scenario_results,
+            baseline_comparison=None,  # Set separately if needed
+        )
+
+    def compare_to_baseline(
+        self,
+        current: BenchmarkResult,
+        baseline: BenchmarkResult,
+    ) -> dict[str, Any]:
+        """Compare current results to a baseline.
+
+        Args:
+            current: Current benchmark results
+            baseline: Baseline benchmark results
+
+        Returns:
+            Comparison dictionary with deltas
+        """
+        comparison: dict[str, Any] = {
+            "baseline_model": baseline.model_name,
+            "baseline_timestamp": baseline.timestamp,
+            "overall_delta": current.overall_score - baseline.overall_score,
+            "per_tool_deltas": {},
+        }
+
+        for tool, current_metrics in current.per_tool_results.items():
+            baseline_metrics = baseline.per_tool_results.get(tool, {})
+            if baseline_metrics:
+                comparison["per_tool_deltas"][tool] = {
+                    "accuracy_delta": current_metrics.get("accuracy", 0) - baseline_metrics.get("accuracy", 0),
+                    "latency_delta_ms": current_metrics.get("latency_mean_ms", 0) - baseline_metrics.get("latency_mean_ms", 0),
+                }
+
+        return comparison
