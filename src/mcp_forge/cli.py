@@ -342,8 +342,40 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state.update_stage(PipelineStage.BENCHMARKING)
         state_manager.save_state(state)
 
-        # TODO: Implement benchmarking
-        console.print("   [yellow]Benchmarking not yet implemented[/yellow]")
+        from mcp_forge.validation import BenchmarkConfig, BenchmarkRunner
+        from mcp_forge.validation.config import StubConfig
+
+        # Use weather stub for pipeline benchmarks
+        stub_config = StubConfig(stub_type="weather", deterministic=True)
+        bench_config = BenchmarkConfig(
+            model_path=Path(state.lora_adapter_path),
+            model_name=state.model_family,
+            samples_per_tool=10,  # Reduced for pipeline speed
+            samples_per_scenario=10,
+            stub_config=stub_config,
+        )
+
+        runner = BenchmarkRunner(bench_config, state.tools)
+
+        def on_benchmark_progress(category: str, current: int, total: int, pct: float) -> None:
+            if current % 5 == 0 or current == total:
+                console.print(f"   {category}: {pct:.0%}")
+
+        result = runner.run(progress_callback=on_benchmark_progress)
+
+        state.benchmark_result = result
+        state_manager.save_state(state)
+
+        # Save report
+        report_path = state_manager.save_benchmark_result(result)
+
+        console.print(f"   Overall score: {result.overall_score:.1%}")
+        console.print(f"   Report: {report_path}")
+
+        if result.overall_score >= 0.85:
+            console.print("   [green]Benchmark passed[/green]")
+        else:
+            console.print("   [yellow]Benchmark below target (continuing)[/yellow]")
 
     # Stage 7: Export
     if state.stage in (PipelineStage.VALIDATING, PipelineStage.BENCHMARKING, PipelineStage.EXPORTING):
@@ -1018,11 +1050,146 @@ def validate(
 @cli.command()
 @click.option("--model", "-m", required=True, type=click.Path(exists=True), help="Path to model")
 @click.option("--tools", "-t", required=True, type=click.Path(exists=True), help="Tools JSON file")
-@click.option("--baseline", help="Baseline model for comparison")
+@click.option("--baseline", type=click.Path(exists=True), help="Baseline benchmark JSON for comparison")
+@click.option("--samples-per-tool", default=20, help="Samples per tool (default: 20)")
+@click.option("--samples-per-scenario", default=20, help="Samples per scenario (default: 20)")
+@click.option("--stub", type=click.Choice(["weather", "filesystem"]), help="Use deterministic stub")
 @click.option("--output", "-o", help="Output directory for reports")
-def benchmark(model: str, tools: str, baseline: str | None, output: str | None):
-    """Run full evaluation benchmark suite."""
-    console.print("[yellow]Benchmarking coming soon[/yellow]")
+@click.pass_context
+def benchmark(
+    ctx,
+    model: str,
+    tools: str,
+    baseline: str | None,
+    samples_per_tool: int,
+    samples_per_scenario: int,
+    stub: str | None,
+    output: str | None,
+):
+    """Run full evaluation benchmark suite.
+
+    Measures tool accuracy, no-tool correctness, and response latency
+    across all tools and scenarios. Generates detailed reports in JSON
+    and Markdown format.
+
+    \b
+    Metrics Measured:
+      - Tool selection accuracy (target: >=90%)
+      - No-tool correctness (target: >=85%)
+      - Loop completion rate (target: >=95%)
+      - Response latency (mean, p50, p95, p99)
+
+    \b
+    Example:
+      mcp-forge benchmark -m ./adapter -t tools.json --stub weather
+    """
+    import json
+
+    from mcp_forge.state import BenchmarkResult, ToolDefinition
+    from mcp_forge.validation import BenchmarkConfig, BenchmarkRunner
+    from mcp_forge.validation.config import StubConfig
+
+    console.print("\n[bold]MCP-Forge Benchmark Suite[/bold]")
+    console.print("=" * 50)
+
+    # Load tools
+    with open(tools) as f:
+        tool_defs = [ToolDefinition.from_dict(t) for t in json.load(f)]
+
+    console.print(f"Model: {model}")
+    console.print(f"Tools: {len(tool_defs)}")
+    console.print(f"Samples: {samples_per_tool}/tool, {samples_per_scenario}/scenario")
+
+    # Configure benchmark
+    if stub:
+        stub_config = StubConfig(stub_type=stub, deterministic=True)
+        mcp_command = None
+    else:
+        stub_config = None
+        mcp_command = None  # Would need --server option for real MCP
+
+    if not stub_config and not mcp_command:
+        console.print("[yellow]Warning: No --stub specified, using weather stub by default[/yellow]")
+        stub_config = StubConfig(stub_type="weather", deterministic=True)
+
+    config = BenchmarkConfig(
+        model_path=Path(model),
+        model_name=Path(model).name,
+        samples_per_tool=samples_per_tool,
+        samples_per_scenario=samples_per_scenario,
+        stub_config=stub_config,
+        mcp_command=mcp_command,
+        baseline_path=Path(baseline) if baseline else None,
+    )
+
+    runner = BenchmarkRunner(config, tool_defs)
+
+    # Run benchmark
+    console.print("\nRunning benchmark...")
+
+    def on_progress(category: str, current: int, total: int, pct: float) -> None:
+        if current % 10 == 0 or current == total:
+            console.print(f"  {category}: {current}/{total} ({pct:.0%})")
+
+    try:
+        result = runner.run(progress_callback=on_progress)
+    except Exception as e:
+        console.print(f"\n[red]Benchmark failed: {e}[/red]")
+        raise SystemExit(1) from e
+
+    # Load and compare to baseline if provided
+    if baseline:
+        with open(baseline) as f:
+            baseline_data = json.load(f)
+        baseline_result = BenchmarkResult.from_dict(baseline_data)
+        result.baseline_comparison = runner.compare_to_baseline(result, baseline_result)
+
+    # Print results
+    console.print("\n" + "=" * 50)
+    console.print("[bold]Benchmark Results[/bold]")
+    console.print(f"Overall Score: {result.overall_score:.1%}")
+
+    console.print("\n[bold]Per-Tool Results:[/bold]")
+    for tool, metrics in result.per_tool_results.items():
+        console.print(f"  {tool}:")
+        console.print(f"    Accuracy: {metrics.get('accuracy', 0):.1%}")
+        console.print(f"    Schema: {metrics.get('schema', 0):.1%}")
+        console.print(f"    Latency: {metrics.get('latency_mean_ms', 0):.1f}ms (p95: {metrics.get('latency_p95_ms', 0):.1f}ms)")
+
+    console.print("\n[bold]Per-Scenario Results:[/bold]")
+    for scenario, metrics in result.per_scenario_results.items():
+        console.print(f"  {scenario}: {metrics.get('pass_rate', 0):.1%}")
+
+    if result.baseline_comparison:
+        console.print("\n[bold]Baseline Comparison:[/bold]")
+        console.print(f"  vs {result.baseline_comparison['baseline_model']}")
+        delta = result.baseline_comparison['overall_delta']
+        color = "green" if delta >= 0 else "red"
+        console.print(f"  Overall delta: [{color}]{delta:+.1%}[/{color}]")
+
+    # Save reports
+    state_manager: StateManager = ctx.obj["state_manager"]
+    report_path = state_manager.save_benchmark_result(result)
+    console.print(f"\nReports saved: {report_path}")
+
+    # Check thresholds
+    no_tool_rate = result.per_scenario_results.get("no_tool", {}).get("pass_rate", 0)
+    tool_accuracies = [m.get("accuracy", 0) for m in result.per_tool_results.values()]
+    avg_accuracy = sum(tool_accuracies) / len(tool_accuracies) if tool_accuracies else 0
+
+    passes = (
+        avg_accuracy >= config.accuracy_threshold and
+        no_tool_rate >= config.no_tool_threshold
+    )
+
+    if passes:
+        console.print("\n[green]Benchmark passed all thresholds![/green]")
+    else:
+        console.print("\n[yellow]Warning: Some metrics below target thresholds[/yellow]")
+        if avg_accuracy < config.accuracy_threshold:
+            console.print(f"  Tool accuracy: {avg_accuracy:.1%} (target: {config.accuracy_threshold:.0%})")
+        if no_tool_rate < config.no_tool_threshold:
+            console.print(f"  No-tool correctness: {no_tool_rate:.1%} (target: {config.no_tool_threshold:.0%})")
 
 
 # =============================================================================
