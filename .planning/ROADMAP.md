@@ -125,25 +125,26 @@ Transform the existing prototype into a complete, production-ready CLI pipeline 
 
 ---
 
-## Phase 6: Looped Validation
+## Phase 6: Looped Validation ✅
+
+**Status**: Complete (2026-01-13)
+**Plans**: 1 | **Commits**: 8 | **Tests**: +73
 
 **Goal**: Implement the VALIDATING stage with real/stubbed MCP server testing.
 
-**Scope**:
-- Create `validation/looped.py` for validation executor
-- Implement deterministic MCP stubs for reproducible testing
-- Add validation against real MCP servers
-- Create validation result aggregation
-- Implement retry logic for flaky connections
-
-**Research Needed**: MCP server stubbing patterns, tool call accuracy measurement
+**Deliverables**:
+- Validation module structure (config.py, stubs.py, runner.py)
+- InferenceConfig, StubConfig, ValidationConfig dataclasses
+- WeatherStub, FilesystemStub with deterministic responses
+- ValidationRunner with model loading and metric aggregation
+- CLI validate command and pipeline Stage 5 integration
 
 **Acceptance Criteria**:
-- [ ] `mcp-forge validate --model ./trained --server <cmd>` runs validation
-- [ ] Stubbed validation produces deterministic results
-- [ ] Real server validation handles connection failures gracefully
-- [ ] Validation results include accuracy, parse rate, schema conformance
-- [ ] Results persisted in state for benchmarking
+- [x] `mcp-forge validate --model ./trained --server <cmd>` runs validation
+- [x] Stubbed validation produces deterministic results
+- [x] Real server validation handles connection failures gracefully
+- [x] Validation results include accuracy, parse rate, schema conformance
+- [x] Results persisted in state for benchmarking
 
 ---
 
@@ -222,7 +223,7 @@ Transform the existing prototype into a complete, production-ready CLI pipeline 
 | 3 | Data Synthesis Engine | ✅ Complete | 146 |
 | 4 | QC Gate Integration | ✅ Complete | 203 |
 | 5 | Training Engine | ✅ Complete | 242 |
-| 6 | Looped Validation | Pending | - |
+| 6 | Looped Validation | ✅ Complete | 315 |
 | 7 | Benchmark Suite | Pending | - |
 | 8 | GGUF Export | Pending | - |
 | 9 | Bundle Packaging | Pending | - |
