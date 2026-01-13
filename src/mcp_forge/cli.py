@@ -88,6 +88,21 @@ def run(
         console.print("[red]Error: Either --server or --tools-file is required[/red]")
         raise SystemExit(1)
 
+    if samples <= 0:
+        console.print("[red]Error: --samples must be a positive integer[/red]")
+        raise SystemExit(1)
+
+    fixed_ratio = 0.15  # ambiguous (0.10) + edge (0.05)
+    if not 0 <= no_tool_ratio <= 1 or not 0 <= error_ratio <= 1:
+        console.print("[red]Error: --no-tool-ratio and --error-ratio must be between 0 and 1[/red]")
+        raise SystemExit(1)
+    if no_tool_ratio + error_ratio + fixed_ratio > 1.0:
+        console.print(
+            "[red]Error: --no-tool-ratio + --error-ratio is too high "
+            f"(max {1.0 - fixed_ratio:.2f} to keep standard samples non-negative)[/red]"
+        )
+        raise SystemExit(1)
+
     if resume:
         state = state_manager.load_state()
         if state is None:
@@ -99,17 +114,18 @@ def run(
     if not resume:
         # Create synthesis plan
         scenario_weights = {
-            "standard": 1.0 - no_tool_ratio - error_ratio - 0.15,  # Remaining after others
+            "standard": 1.0 - no_tool_ratio - error_ratio - fixed_ratio,  # Remaining after others
             "no_tool": no_tool_ratio,
             "error": error_ratio,
             "ambiguous": 0.10,
             "edge": 0.05
         }
 
+        seed_samples = max(1, min(100, samples // 5))
         synthesis_plan = SynthesisPlan(
             total_samples=samples,
-            seed_samples=min(100, samples // 5),
-            augmented_samples=samples - min(100, samples // 5),
+            seed_samples=seed_samples,
+            augmented_samples=samples - seed_samples,
             scenario_weights=scenario_weights
         )
 
@@ -146,10 +162,19 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state_manager.save_state(state)
 
         if tools_file:
-            # TODO: Implement file-based tool loading
+            import json
+
+            from mcp_forge.state import ToolDefinition
+
             console.print(f"Loading tools from {tools_file}")
-            # tools = load_tools_from_file(tools_file)
-            raise NotImplementedError("File-based tool loading coming in v1.2")
+            try:
+                with open(tools_file) as f:
+                    tools_data = json.load(f)
+                tools = [ToolDefinition.from_dict(t) for t in tools_data]
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid tools JSON: {e}") from e
+            except (KeyError, TypeError) as e:
+                raise ValueError(f"Invalid tool definition format: {e}") from e
         else:
             tools = asyncio.run(inspect_mcp_server(state.mcp_command))
 
@@ -246,10 +271,32 @@ def _run_pipeline(state, state_manager, tools_file: str | None, skip_benchmark: 
         state.update_stage(PipelineStage.TRAINING)
         state_manager.save_state(state)
 
+        from mcp_forge.training import TrainingConfig, TrainingEngine
+
         console.print(f"   Model: {state.model_family}")
         console.print(f"   Profile: {state.profile}")
-        # TODO: Implement training
-        console.print("   [yellow]Training not yet implemented[/yellow]")
+
+        training_config = TrainingConfig(
+            model_family=state.model_family,
+            profile=state.profile,
+            data_path=Path(state.training_data_path),
+            output_dir=state_manager.state_dir / "adapters",
+        )
+
+        engine = TrainingEngine(training_config)
+
+        def on_training_progress(step: int, total: int, progress: float, loss: float | None, epoch: float) -> None:
+            state.training_progress = progress
+            state.training_loss = loss
+            state_manager.save_state(state)
+            loss_str = f"{loss:.4f}" if loss else "N/A"
+            console.print(f"   Step {step}/{total} | Loss: {loss_str}")
+
+        with console.status("[bold green]Training..."):
+            adapter_path = engine.train(progress_callback=on_training_progress)
+
+        state.lora_adapter_path = str(adapter_path)
+        console.print(f"   [green]✓[/green] Adapter saved to {adapter_path}")
 
     # Stage 5: Validation
     if state.stage in (PipelineStage.TRAINING, PipelineStage.VALIDATING):
@@ -306,6 +353,7 @@ def doctor():
     import os
     import platform
     import shutil
+    from importlib import metadata
 
     # Python version
     py_version = platform.python_version()
@@ -345,10 +393,15 @@ def doctor():
     for name, module in deps:
         try:
             mod = __import__(module)
-            version = getattr(mod, "__version__", "installed")
+            try:
+                version = metadata.version(name)
+            except metadata.PackageNotFoundError:
+                version = getattr(mod, "__version__", "installed")
             console.print(f"[green]PASS[/green] {name} {version}")
         except ImportError:
             console.print(f"[red]FAIL[/red] {name} not installed")
+        except Exception as e:
+            console.print(f"[red]FAIL[/red] {name} failed to import ({e})")
 
     # OpenAI API key
     if os.environ.get("OPENAI_API_KEY"):
@@ -475,7 +528,7 @@ def _save_qc_report(
     """
     import csv
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     if format_type == "json":
         data = report.to_dict()
@@ -486,21 +539,22 @@ def _save_qc_report(
                 "schema_pass_threshold": config.schema_pass_threshold,
                 "min_samples_per_tool": config.min_samples_per_tool,
             }
-        data["generated_at"] = datetime.utcnow().isoformat()
+        data["generated_at"] = datetime.now(timezone.utc).isoformat()
 
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
 
     elif format_type == "markdown":
+        valid_rate = report.valid_samples / report.total_samples if report.total_samples > 0 else 0
         lines = [
             "# QC Report",
             "",
-            f"**Generated:** {datetime.utcnow().isoformat()}",
+            f"**Generated:** {datetime.now(timezone.utc).isoformat()}",
             "",
             "## Summary",
             "",
             f"- Total samples: {report.total_samples}",
-            f"- Valid samples: {report.valid_samples} ({report.valid_samples/report.total_samples:.1%})",
+            f"- Valid samples: {report.valid_samples} ({valid_rate:.1%})",
             f"- Dropped: {report.dropped_samples}",
             f"- Schema pass rate: {report.schema_pass_rate:.1%}",
             f"- Dedup rate: {report.dedup_rate:.1%}",
@@ -720,10 +774,15 @@ def generate(server: str | None, tools: str | None, samples: int, seed_samples: 
     console.print(f"Found {len(tool_list)} tools")
 
     # Create synthesis plan
+    if samples <= 0:
+        console.print("[red]Error: --samples must be a positive integer[/red]")
+        raise SystemExit(1)
+
+    seed_target = max(1, min(seed_samples, max(1, samples // 2)))
     plan = SynthesisPlan(
         total_samples=samples,
-        seed_samples=min(seed_samples, samples // 2),
-        augmented_samples=samples - min(seed_samples, samples // 2),
+        seed_samples=seed_target,
+        augmented_samples=samples - seed_target,
     )
 
     # Create output directory
@@ -770,7 +829,44 @@ def generate(server: str | None, tools: str | None, samples: int, seed_samples: 
 @click.option("--output", "-o", required=True, help="Output directory for LoRA adapter")
 def train(data: str, model: str, profile: str, output: str):
     """Fine-tune a model on training data."""
-    console.print("[yellow]Training coming soon[/yellow]")
+    from mcp_forge.training import TrainingConfig, TrainingEngine
+
+    console.print("\n[bold]MCP-Forge Training[/bold]")
+    console.print("=" * 50)
+    console.print(f"Data: {data}")
+    console.print(f"Model: {model}")
+    console.print(f"Profile: {profile}")
+    console.print(f"Output: {output}")
+    console.print()
+
+    output_path = Path(output)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    training_config = TrainingConfig(
+        model_family=model,
+        profile=profile,
+        data_path=Path(data),
+        output_dir=output_path,
+    )
+
+    engine = TrainingEngine(training_config)
+
+    def on_progress(step: int, total: int, progress: float, loss: float | None, epoch: float) -> None:
+        loss_str = f"{loss:.4f}" if loss else "N/A"
+        console.print(f"Step {step}/{total} | Loss: {loss_str} | Epoch: {epoch:.2f}")
+
+    console.print("Loading model...")
+    engine.load_model()
+    console.print("[green]Model loaded[/green]\n")
+
+    console.print("Starting training...")
+    try:
+        adapter_path = engine.train(progress_callback=on_progress)
+        console.print("\n[green]Training complete![/green]")
+        console.print(f"Adapter saved to: {adapter_path}")
+    except Exception as e:
+        console.print(f"\n[red]Training failed: {e}[/red]")
+        raise SystemExit(1) from e
 
 
 @cli.command()
