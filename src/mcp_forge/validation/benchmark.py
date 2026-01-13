@@ -6,6 +6,7 @@ baseline comparison and latency tracking.
 
 from __future__ import annotations
 
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -16,7 +17,6 @@ from typing import Any
 from mcp_forge.state import BenchmarkResult, Scenario, ToolDefinition
 from mcp_forge.validation.config import InferenceConfig, StubConfig, ValidationConfig
 from mcp_forge.validation.runner import ValidationRunner, ValidationSample
-from mcp_forge.validation.stubs import StubRegistry
 
 
 @dataclass
@@ -150,8 +150,6 @@ class BenchmarkRunner:
             Dictionary with keys like 'tool:get_weather', 'scenario:no_tool'
             and values as lists of ValidationSample objects
         """
-        import random
-
         rng = random.Random(42)
 
         samples: dict[str, list[ValidationSample]] = {}
@@ -172,7 +170,7 @@ class BenchmarkRunner:
         self,
         tool: ToolDefinition,
         count: int,
-        rng: "random.Random",
+        rng: random.Random,
     ) -> list[ValidationSample]:
         """Generate benchmark samples for a specific tool.
 
@@ -184,8 +182,6 @@ class BenchmarkRunner:
         Returns:
             List of ValidationSample objects for this tool
         """
-        import random
-
         samples: list[ValidationSample] = []
 
         # Tool-specific prompt templates
@@ -239,7 +235,7 @@ class BenchmarkRunner:
         self,
         scenario: Scenario,
         count: int,
-        rng: "random.Random",
+        rng: random.Random,
     ) -> list[ValidationSample]:
         """Generate benchmark samples for a specific scenario type.
 
@@ -251,8 +247,6 @@ class BenchmarkRunner:
         Returns:
             List of ValidationSample objects for this scenario
         """
-        import random
-
         samples: list[ValidationSample] = []
 
         if scenario == Scenario.NO_TOOL:
@@ -324,8 +318,6 @@ class BenchmarkRunner:
         Returns:
             BenchmarkResult with per-tool and per-scenario metrics
         """
-        import random
-
         runner = self._get_validation_runner()
 
         # Load model once
