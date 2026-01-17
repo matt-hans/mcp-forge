@@ -1,7 +1,0 @@
-{
-  "enabledPlugins": {
-    "rust-analyzer-lsp@claude-plugins-official": true,
-    "claude-mem@thedotmack": false,
-    "pyright-lsp@claude-plugins-official": true
-  }
-}
