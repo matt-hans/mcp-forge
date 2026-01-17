@@ -7,6 +7,7 @@ samples across all scenario types.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from typing import Any
 import openai
 from openai import APIError, RateLimitError
 
+from mcp_forge.data.cache import ResponseCache
 from mcp_forge.data.formatter import create_training_sample, format_tool_call
 from mcp_forge.state import SynthesisPlan, ToolDefinition
 
@@ -41,6 +43,8 @@ class SeedGeneratorConfig:
     retry_delay: float = 1.0
     batch_size: int = 10
     request_timeout: float = 60.0
+    cache_enabled: bool = True
+    cache_path: Path | None = None
 
 
 @dataclass
@@ -97,6 +101,11 @@ class SeedGenerator:
         self.config = config or SeedGeneratorConfig()
         self.tools = tools or []
         self._client: openai.AsyncOpenAI | None = None
+        self._cache: ResponseCache | None = None
+
+        if self.config.cache_enabled:
+            cache_path = self.config.cache_path or Path.cwd() / ".mcp-forge" / "cache" / "seed_cache.json"
+            self._cache = ResponseCache(cache_path)
 
     @property
     def client(self) -> openai.AsyncOpenAI:
@@ -192,12 +201,35 @@ class SeedGenerator:
 
         # Build the generation prompt
         prompt = self._create_seed_prompt(scenario, tool)
+        cache_key = self._make_cache_key(prompt, tool)
+        cached = self._cache.get(cache_key) if self._cache else None
+        if isinstance(cached, dict):
+            return create_training_sample(
+                sample_id=f"seed_{uuid.uuid4().hex[:8]}",
+                source="seed",
+                scenario=scenario,
+                tool_name=cached.get("tool_name"),
+                user_message=cached.get("user_message", ""),
+                assistant_response=cached.get("assistant_response", ""),
+                tools=self.tools,
+            )
 
         # Call GPT with retry logic
         for attempt in range(self.config.max_retries):
             try:
                 response = await self._call_gpt(prompt, tool)
-                return self._parse_gpt_response(response, scenario, tool)
+                payload = self._parse_gpt_response(response, scenario, tool)
+                if self._cache:
+                    self._cache.set(cache_key, payload)
+                return create_training_sample(
+                    sample_id=f"seed_{uuid.uuid4().hex[:8]}",
+                    source="seed",
+                    scenario=scenario,
+                    tool_name=payload.get("tool_name"),
+                    user_message=payload.get("user_message", ""),
+                    assistant_response=payload.get("assistant_response", ""),
+                    tools=self.tools,
+                )
             except (APIError, RateLimitError) as e:
                 if attempt < self.config.max_retries - 1:
                     delay = self.config.retry_delay * (2**attempt)
@@ -306,7 +338,7 @@ Return ONLY valid JSON in this format:
         scenario: str,
         tool: ToolDefinition | None,
     ) -> dict[str, Any]:
-        """Parse GPT response into training sample format.
+        """Parse GPT response into training payload.
 
         Args:
             response: GPT API response
@@ -316,7 +348,6 @@ Return ONLY valid JSON in this format:
         Returns:
             Formatted training sample dictionary
         """
-        sample_id = f"seed_{uuid.uuid4().hex[:8]}"
         tool_name = tool.name if tool else None
 
         # Extract content from response
@@ -350,15 +381,27 @@ Return ONLY valid JSON in this format:
                 args = {}
             assistant_response = format_tool_call(tool_name, args)
 
-        return create_training_sample(
-            sample_id=sample_id,
-            source="seed",
-            scenario=scenario,
-            tool_name=tool_name,
-            user_message=user_message,
-            assistant_response=assistant_response,
-            tools=self.tools,
+        return {
+            "tool_name": tool_name,
+            "user_message": user_message,
+            "assistant_response": assistant_response,
+        }
+
+    def _make_cache_key(
+        self,
+        messages: list[dict[str, str]],
+        tool: ToolDefinition | None,
+    ) -> str:
+        """Create cache key for a prompt."""
+        payload = json.dumps(
+            {
+                "model": self.config.model,
+                "messages": messages,
+                "tool_name": tool.name if tool else None,
+            },
+            sort_keys=True,
         )
+        return hashlib.sha256(payload.encode()).hexdigest()
 
 
 async def generate_seeds_standalone(

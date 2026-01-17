@@ -40,6 +40,7 @@ class TrainingConfig:
 MODEL_IDS: dict[str, str] = {
     "deepseek-r1": "unsloth/DeepSeek-R1-Distill-Llama-8B-bnb-4bit",
     "qwen-2.5": "unsloth/Qwen2.5-14B-Instruct-bnb-4bit",
+    "qwen-2.5-7b": "unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
 }
 
 

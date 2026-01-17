@@ -61,26 +61,31 @@ async def inspect_mcp_server(
         args=args,
     )
 
+    async def _inspect() -> list[ToolDefinition]:
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                # Initialize connection
+                await session.initialize()
+
+                # Fetch tool list
+                tools_response = await session.list_tools()
+
+                # Convert to our ToolDefinition format
+                tools = []
+                for tool in tools_response.tools:
+                    tools.append(ToolDefinition(
+                        name=tool.name,
+                        description=tool.description or "",
+                        input_schema=tool.inputSchema if hasattr(tool, "inputSchema") else {},
+                    ))
+
+                return tools
+
     try:
-        async with asyncio.timeout(timeout):
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    # Initialize connection
-                    await session.initialize()
-
-                    # Fetch tool list
-                    tools_response = await session.list_tools()
-
-                    # Convert to our ToolDefinition format
-                    tools = []
-                    for tool in tools_response.tools:
-                        tools.append(ToolDefinition(
-                            name=tool.name,
-                            description=tool.description or "",
-                            input_schema=tool.inputSchema if hasattr(tool, 'inputSchema') else {}
-                        ))
-
-                    return tools
+        if hasattr(asyncio, "timeout"):
+            async with asyncio.timeout(timeout):
+                return await _inspect()
+        return await asyncio.wait_for(_inspect(), timeout=timeout)
 
     except asyncio.TimeoutError as e:
         raise MCPInspectorError(

@@ -9,7 +9,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -228,8 +228,8 @@ class PipelineState:
     bundle_path: str | None = None
 
     # Metadata
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     error: str | None = None
 
     # Training progress
@@ -306,8 +306,8 @@ class PipelineState:
             benchmark_result=benchmark,
             gguf_path=data.get("gguf_path"),
             bundle_path=data.get("bundle_path"),
-            created_at=data.get("created_at", datetime.utcnow().isoformat()),
-            updated_at=data.get("updated_at", datetime.utcnow().isoformat()),
+            created_at=data.get("created_at", datetime.now(timezone.utc).isoformat()),
+            updated_at=data.get("updated_at", datetime.now(timezone.utc).isoformat()),
             error=data.get("error"),
             training_progress=data.get("training_progress", 0.0),
             training_loss=data.get("training_loss"),
@@ -317,13 +317,13 @@ class PipelineState:
     def update_stage(self, stage: PipelineStage) -> None:
         """Update stage and timestamp."""
         self.stage = stage
-        self.updated_at = datetime.utcnow().isoformat()
+        self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def set_error(self, error: str) -> None:
         """Mark pipeline as failed with error message."""
         self.error = error
         self.stage = PipelineStage.FAILED
-        self.updated_at = datetime.utcnow().isoformat()
+        self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def compute_toolset_hash(self) -> str:
         """Compute hash of all tool schemas for drift detection."""
@@ -387,7 +387,7 @@ class StateManager:
     def save_state(self, state: PipelineState) -> None:
         """Atomically save state to disk."""
         self.ensure_dirs()
-        state.updated_at = datetime.utcnow().isoformat()
+        state.updated_at = datetime.now(timezone.utc).isoformat()
 
         # Write to temp file first, then rename (atomic on POSIX)
         temp_file = self.state_file.with_suffix(".tmp")
@@ -446,7 +446,7 @@ class StateManager:
 
     def save_qc_report(self, report: QCReport) -> Path:
         """Save QC report to reports directory (v1.1)."""
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"qc_{timestamp}.json"
         path = self.get_report_path(filename)
         with open(path, "w") as f:
@@ -455,7 +455,7 @@ class StateManager:
 
     def save_benchmark_result(self, result: BenchmarkResult) -> Path:
         """Save benchmark result to reports directory (v1.1)."""
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
         # Save JSON
         json_path = self.get_report_path(f"benchmark_{timestamp}.json")

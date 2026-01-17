@@ -60,13 +60,20 @@ def valid_samples() -> list[dict[str, Any]]:
             "id": f"valid_{i:03d}",
             "source": "seed",
             "scenario": "standard",
-            "tool_name": "get_weather",
+            "tool_name": "get_weather" if i % 2 == 0 else "search_files",
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": f"What's the weather in City {i}?"},
+                {
+                    "role": "user",
+                    "content": f"What's the weather in City {i}?" if i % 2 == 0 else f"Find files matching report_{i}*.txt",
+                },
                 {
                     "role": "assistant",
-                    "content": f'<tool_call>{{"name": "get_weather", "arguments": {{"location": "City {i}"}}}}</tool_call>',
+                    "content": (
+                        f'<tool_call>{{"name": "get_weather", "arguments": {{"location": "City {i}"}}}}</tool_call>'
+                        if i % 2 == 0
+                        else f'<tool_call>{{"name": "search_files", "arguments": {{"pattern": "report_{i}*.txt"}}}}</tool_call>'
+                    ),
                 },
             ],
         }

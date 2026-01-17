@@ -21,6 +21,7 @@ from typing import Any
 import openai
 from openai import APIError, RateLimitError
 
+from mcp_forge.data.cache import ResponseCache
 from mcp_forge.data.formatter import (
     create_training_sample,
     format_tool_call,
@@ -44,12 +45,14 @@ class AugmenterConfig:
     model: str = "gpt-4o"  # GPT-5 when available
     expansion_factor: int = 10
     temperature_range: tuple[float, float] = (0.7, 1.0)
-    max_synthetic_ratio: float = 0.30  # Prevent model collapse
+    max_synthetic_ratio: float = 0.90  # Allow up to ~10x expansion
     max_retries: int = 3
     retry_delay: float = 1.0
     batch_size: int = 5
     request_timeout: float = 60.0
     similarity_threshold: float = 0.85  # For deduplication
+    cache_enabled: bool = True
+    cache_path: Path | None = None
 
 
 @dataclass
@@ -109,6 +112,12 @@ Return ONLY valid JSON with the new arguments, nothing else."""
         self.tool_schemas = {t.name: t.input_schema for t in self.tools}
         self._client: openai.AsyncOpenAI | None = None
         self._seen_hashes: set[str] = set()
+        self._cache: ResponseCache | None = None
+        self._cache_cursor: dict[str, int] = {}
+
+        if self.config.cache_enabled:
+            cache_path = self.config.cache_path or Path.cwd() / ".mcp-forge" / "cache" / "augment_cache.json"
+            self._cache = ResponseCache(cache_path)
 
     @property
     def client(self) -> openai.AsyncOpenAI:
@@ -288,24 +297,32 @@ Return ONLY valid JSON with the new arguments, nothing else."""
 
         # Get paraphrased query from GPT
         prompt = self.PARAPHRASE_PROMPT.format(original=user_message)
+        cache_key = self._make_cache_key("paraphrase", prompt)
+        cached = self._get_cached_variant(cache_key)
+        if isinstance(cached, str) and cached:
+            paraphrased = cached
+        else:
+            paraphrased = ""
 
         temperature = random.uniform(*self.config.temperature_range)
 
         for attempt in range(self.config.max_retries):
             try:
-                response = await self.client.chat.completions.create(
-                    model=self.config.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    timeout=self.config.request_timeout,
-                )
-
-                paraphrased = response.choices[0].message.content
                 if not paraphrased:
-                    continue
+                    response = await self.client.chat.completions.create(
+                        model=self.config.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=temperature,
+                        timeout=self.config.request_timeout,
+                    )
 
-                # Clean up response
-                paraphrased = paraphrased.strip().strip('"').strip("'")
+                    paraphrased = response.choices[0].message.content or ""
+                    if not paraphrased:
+                        continue
+
+                    # Clean up response
+                    paraphrased = paraphrased.strip().strip('"').strip("'")
+                    self._store_cached_variant(cache_key, paraphrased)
 
                 # Create new sample with paraphrased query
                 sample_id = f"aug_{uuid.uuid4().hex[:8]}"
@@ -368,34 +385,41 @@ Return ONLY valid JSON with the new arguments, nothing else."""
             original_args=json.dumps(tool_call.get("arguments", {})),
             schema=json.dumps(schema, indent=2),
         )
+        cache_key = self._make_cache_key("params", prompt)
+        cached = self._get_cached_variant(cache_key)
+        cached_args = cached if isinstance(cached, dict) else None
 
         temperature = random.uniform(*self.config.temperature_range)
 
         for attempt in range(self.config.max_retries):
             try:
-                response = await self.client.chat.completions.create(
-                    model=self.config.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    timeout=self.config.request_timeout,
-                )
+                if cached_args is None:
+                    response = await self.client.chat.completions.create(
+                        model=self.config.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=temperature,
+                        timeout=self.config.request_timeout,
+                    )
 
-                content = response.choices[0].message.content
-                if not content:
-                    continue
+                    content = response.choices[0].message.content
+                    if not content:
+                        continue
 
-                # Parse new arguments
-                try:
-                    # Clean up potential markdown
-                    clean_content = content
-                    if "```json" in content:
-                        clean_content = content.split("```json")[1].split("```")[0]
-                    elif "```" in content:
-                        clean_content = content.split("```")[1].split("```")[0]
+                    # Parse new arguments
+                    try:
+                        # Clean up potential markdown
+                        clean_content = content
+                        if "```json" in content:
+                            clean_content = content.split("```json")[1].split("```")[0]
+                        elif "```" in content:
+                            clean_content = content.split("```")[1].split("```")[0]
 
-                    new_args = json.loads(clean_content.strip())
-                except json.JSONDecodeError:
-                    continue
+                        new_args = json.loads(clean_content.strip())
+                    except json.JSONDecodeError:
+                        continue
+                    self._store_cached_variant(cache_key, new_args)
+                else:
+                    new_args = cached_args
 
                 # Create new assistant response with varied parameters
                 new_tool_call = format_tool_call(tool_name, new_args)
@@ -451,6 +475,37 @@ Return ONLY valid JSON with the new arguments, nothing else."""
 
         content = "|||".join(key_parts)
         return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    def _make_cache_key(self, kind: str, prompt: str) -> str:
+        """Generate cache key for a prompt."""
+        payload = json.dumps(
+            {"kind": kind, "model": self.config.model, "prompt": prompt},
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _get_cached_variant(self, key: str) -> Any | None:
+        """Return next cached variant for a key, if available."""
+        if not self._cache:
+            return None
+        cached = self._cache.get(key)
+        if not cached:
+            return None
+        cached_list = cached if isinstance(cached, list) else [cached]
+        cursor = self._cache_cursor.get(key, 0)
+        if cursor >= len(cached_list):
+            return None
+        self._cache_cursor[key] = cursor + 1
+        return cached_list[cursor]
+
+    def _store_cached_variant(self, key: str, value: Any) -> None:
+        """Append cached variant for a key."""
+        if not self._cache:
+            return
+        cached = self._cache.get(key)
+        cached_list = cached if isinstance(cached, list) else ([] if cached is None else [cached])
+        cached_list.append(value)
+        self._cache.set(key, cached_list)
 
 
 async def augment_dataset_standalone(

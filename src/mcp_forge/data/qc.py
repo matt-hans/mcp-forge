@@ -234,8 +234,8 @@ class DataQualityController:
         self.repair_stats = RepairStats()
 
         validated_samples: list[ValidatedSample] = []
-        tool_coverage: dict[str, int] = defaultdict(int)
-        scenario_coverage: dict[str, int] = defaultdict(int)
+        tool_coverage: dict[str, int] = {name: 0 for name in self.tool_names}
+        scenario_coverage: dict[str, int] = {s.value: 0 for s in Scenario}
 
         total_samples = 0
         dropped_samples = 0
@@ -257,10 +257,24 @@ class DataQualityController:
                         sample_id=f"line_{total_samples}",
                         issue_type="json_error",
                         message=f"Invalid JSON: {e}",
-                        severity="error"
+                        severity="error",
                     ))
                     dropped_samples += 1
                     continue
+
+                if not isinstance(sample, dict):
+                    self.issues.append(QCIssue(
+                        sample_id=f"line_{total_samples}",
+                        issue_type="invalid_sample",
+                        message="Sample must be a JSON object",
+                        severity="error",
+                    ))
+                    dropped_samples += 1
+                    continue
+
+                if self.config.auto_repair:
+                    sample_id = sample.get("id", f"line_{total_samples}")
+                    _, sample = self.repair_sample(sample, sample_id)
 
                 # Validate sample
                 validated = self._validate_sample(sample)
@@ -379,6 +393,9 @@ class DataQualityController:
                         severity="error"
                     ))
                     return None
+
+        if scenario == "no_tool":
+            tool_name = None
 
         # Check for duplicates
         content_hash = self._compute_hash(sample)
@@ -503,7 +520,8 @@ class DataQualityController:
 
         # Summary
         console.print(f"\nSamples analyzed: {report.total_samples}")
-        console.print(f"Valid samples: {report.valid_samples} ({report.valid_samples/report.total_samples:.1%})")
+        valid_rate = report.valid_samples / report.total_samples if report.total_samples > 0 else 0
+        console.print(f"Valid samples: {report.valid_samples} ({valid_rate:.1%})")
         console.print(f"Dropped: {report.dropped_samples}")
 
         # Issue breakdown

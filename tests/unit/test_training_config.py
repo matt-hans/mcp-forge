@@ -123,6 +123,12 @@ class TestModelIDs:
         assert "Qwen2.5-14B-Instruct" in MODEL_IDS["qwen-2.5"]
         assert "bnb-4bit" in MODEL_IDS["qwen-2.5"]
 
+    def test_qwen_7b_mapping(self):
+        """qwen-2.5-7b maps to correct Unsloth ID."""
+        assert "qwen-2.5-7b" in MODEL_IDS
+        assert "Qwen2.5-7B-Instruct" in MODEL_IDS["qwen-2.5-7b"]
+        assert "bnb-4bit" in MODEL_IDS["qwen-2.5-7b"]
+
 
 class TestGetProfile:
     """Tests for get_profile function."""
@@ -168,3 +174,4 @@ class TestGetModelId:
         error_msg = str(exc_info.value)
         assert "deepseek-r1" in error_msg
         assert "qwen-2.5" in error_msg
+        assert "qwen-2.5-7b" in error_msg

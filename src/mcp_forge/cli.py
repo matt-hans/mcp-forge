@@ -55,7 +55,7 @@ def cli(ctx):
 @cli.command()
 @click.option("--server", "-s", help="MCP server command (e.g., 'npx -y @mcp/server-weather')")
 @click.option("--tools-file", "-t", type=click.Path(exists=True), help="Import tools from file instead of MCP")
-@click.option("--model", "-m", type=click.Choice(["deepseek-r1", "qwen-2.5"]), default="deepseek-r1", help="Model family")
+@click.option("--model", "-m", type=click.Choice(["deepseek-r1", "qwen-2.5", "qwen-2.5-7b"]), default="qwen-2.5-7b", help="Model family")
 @click.option("--profile", "-p", type=click.Choice(["fast_dev", "balanced", "max_quality"]), default="balanced", help="Training profile")
 @click.option("--samples", default=500, help="Total samples to generate")
 @click.option("--no-tool-ratio", default=0.15, help="Ratio of no-tool samples")
@@ -974,7 +974,7 @@ def generate(server: str | None, tools: str | None, samples: int, seed_samples: 
 
 @cli.command()
 @click.option("--data", "-d", required=True, type=click.Path(exists=True), help="Training data JSONL file")
-@click.option("--model", "-m", type=click.Choice(["deepseek-r1", "qwen-2.5"]), required=True, help="Model family")
+@click.option("--model", "-m", type=click.Choice(["deepseek-r1", "qwen-2.5", "qwen-2.5-7b"]), required=True, help="Model family")
 @click.option("--profile", "-p", type=click.Choice(["fast_dev", "balanced", "max_quality"]), default="balanced")
 @click.option("--output", "-o", required=True, help="Output directory for LoRA adapter")
 def train(data: str, model: str, profile: str, output: str):

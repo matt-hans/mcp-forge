@@ -357,7 +357,7 @@ class TestAugmenter:
         config = AugmenterConfig()
         assert config.model == "gpt-4o"
         assert config.expansion_factor == 10
-        assert config.max_synthetic_ratio == 0.30
+        assert config.max_synthetic_ratio == 0.90
         assert 0.7 <= config.temperature_range[0] <= config.temperature_range[1] <= 1.0
 
     @pytest.mark.asyncio

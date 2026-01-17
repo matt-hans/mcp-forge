@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from mcp_forge.state import (
     BenchmarkResult,
@@ -403,7 +403,7 @@ class TestStateManager:
         """Test benchmark result saving creates both JSON and Markdown."""
         result = BenchmarkResult(
             model_name="test-model",
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             overall_score=0.92,
             per_tool_results={"tool1": {"accuracy": 0.95, "schema": 0.98, "latency": 1.2}},
             per_scenario_results={"standard": {"pass_rate": 0.94}},
